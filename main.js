@@ -1,7 +1,7 @@
 /*
  * @Date: 2024-01-25 15:52:14
  * @LastEditors: admin@54xavier.cn
- * @LastEditTime: 2024-04-05 09:41:20
+ * @LastEditTime: 2024-12-23 15:23:56
  * @FilePath: \electron-hiprint\main.js
  */
 const {
@@ -12,22 +12,50 @@ const {
   Notification,
   Tray,
   Menu,
-  shell
+  shell,
 } = require("electron");
+const electronLog = require("electron-log");
 const path = require("path");
 const server = require("http").createServer();
 const helper = require("./src/helper");
 const printSetup = require("./src/print");
+const renderSetup = require("./src/render");
 const setSetup = require("./src/set");
-const log = require("./tools/log");
+const printLogSetup = require("./src/printLog");
 const {
   store,
   address,
   initServeEvent,
   initClientEvent,
+  getMachineId,
+  showAboutDialog,
 } = require("./tools/utils");
-const { machineIdSync } = require("node-machine-id");
+
 const TaskRunner = require("concurrent-tasks");
+const dayjs = require("dayjs");
+
+const logPath = store.get("logPath") || app.getPath("logs");
+
+Object.assign(console, electronLog.functions);
+
+electronLog.transports.file.resolvePathFn = () =>
+  path.join(logPath, dayjs().format("YYYY-MM-DD.log"));
+
+// 监听崩溃事件
+process.on("uncaughtException", (error) => {
+  console.error(error);
+});
+
+// 监听渲染进程崩溃
+app.on("web-contents-created", (event, contents) => {
+  contents.on("render-process-gone", (event, details) => {
+    console.error(details.reason);
+  });
+});
+
+if (store.get("disabledGpu")) {
+  app.commandLine.appendSwitch("disable-gpu");
+}
 
 // 主进程
 global.MAIN_WINDOW = null;
@@ -37,6 +65,10 @@ global.APP_TRAY = null;
 global.PRINT_WINDOW = null;
 // 设置窗口
 global.SET_WINDOW = null;
+// 渲染窗口
+global.RENDER_WINDOW = null;
+// 打印日志窗口
+global.PRINT_LOG_WINDOW = null;
 // socket.io 服务端
 global.SOCKET_SERVER = null;
 // socket.io-client 客户端
@@ -56,6 +88,8 @@ global.PRINT_FRAGMENTS_MAPPING = {
   //   }
   // }
 };
+global.RENDER_RUNNER = new TaskRunner({ concurrency: 1 });
+global.RENDER_RUNNER_DONE = {};
 
 // socket.io 服务端，用于创建本地服务
 const ioServer = (global.SOCKET_SERVER = new require("socket.io")(server, {
@@ -115,7 +149,8 @@ async function initialize() {
 
   // 获取设备唯一id
   ipcMain.on("getMachineId", (event) => {
-    event.sender.send("machineId", machineIdSync({ original: true }));
+    const machineId = getMachineId();
+    event.sender.send("machineId", machineId);
   });
 
   // 获取设备ip、mac等信息
@@ -137,7 +172,7 @@ async function initialize() {
         createWindow();
       }
     });
-    log("==> Electron-hiprint 启动 <==")
+    console.log("==> Electron-hiprint 启动 <==");
   });
 }
 
@@ -147,13 +182,13 @@ async function initialize() {
  */
 async function createWindow() {
   const windowOptions = {
-    width: 500, // 窗口宽度
-    height: 300, // 窗口高度
+    width: 800, // 窗口宽度
+    height: 800, // 窗口高度
     title: store.get("mainTitle") || "Electron-hiprint",
     useContentSize: true, // 窗口大小不包含边框
     center: true, // 居中
-    resizable: false, // 不可缩放
-    show: store.get("openAsHidden") ? false : true, // 显示
+    resizable: false, // 禁止窗口缩放
+    show: true, // 初始隐藏
     webPreferences: {
       // 设置此项为false后，才可在渲染进程中使用 electron api
       contextIsolation: false,
@@ -184,11 +219,6 @@ async function createWindow() {
   const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
   MAIN_WINDOW.webContents.loadURL(indexHtml);
 
-  // 未打包时打开开发者工具
-  if (!app.isPackaged) {
-    MAIN_WINDOW.webContents.openDevTools();
-  }
-
   // 退出
   MAIN_WINDOW.on("closed", () => {
     MAIN_WINDOW = null;
@@ -215,6 +245,13 @@ async function createWindow() {
   // 主窗口 Dom 加载完毕
   MAIN_WINDOW.webContents.on("dom-ready", async () => {
     try {
+      if (!store.get("openAsHidden")) {
+        MAIN_WINDOW.show();
+      }
+      // 未打包时打开开发者工具
+      if (!app.isPackaged) {
+        MAIN_WINDOW.webContents.openDevTools();
+      }
       // 本地服务开启端口监听
       server.listen(store.get("port") || 17521);
       // 初始化本地 服务端事件
@@ -247,6 +284,8 @@ async function createWindow() {
   initTray();
   // 打印窗口初始化
   await printSetup();
+  // 渲染窗口初始化
+  await renderSetup();
 
   return MAIN_WINDOW;
 }
@@ -266,11 +305,16 @@ function loadingView(windowOptions) {
     height: windowOptions.height,
   });
 
-  const loadingHtml = path.join("file://", app.getAppPath(), "assets/loading.html");
+  const loadingHtml = path.join(
+    "file://",
+    app.getAppPath(),
+    "assets/loading.html",
+  );
   loadingBrowserView.webContents.loadURL(loadingHtml);
 
   // 主窗口 dom 加载完毕，移除 loadingBrowserView
   MAIN_WINDOW.webContents.on("dom-ready", async (event) => {
+    loadingBrowserView.webContents.destroy();
     MAIN_WINDOW.removeBrowserView(loadingBrowserView);
   });
 }
@@ -282,6 +326,26 @@ function loadingView(windowOptions) {
 function systemSetup() {
   // 隐藏菜单栏
   Menu.setApplicationMenu(null);
+}
+
+/**
+ * @description: 显示主窗口
+ * @return {Void}
+ */
+function showMainWindow() {
+  if (MAIN_WINDOW.isMinimized()) {
+    // 将窗口从最小化状态恢复到以前的状态
+    MAIN_WINDOW.restore();
+  }
+  if (!MAIN_WINDOW.isVisible()) {
+    // 主窗口关闭不会被销毁，只是隐藏，重新显示即可
+    MAIN_WINDOW.show();
+  }
+  if (!MAIN_WINDOW.isFocused()) {
+    // 主窗口未聚焦，使其聚焦
+    MAIN_WINDOW.focus();
+  }
+  MAIN_WINDOW.setSkipTaskbar(false);
 }
 
 /**
@@ -299,24 +363,48 @@ function initTray() {
   // 托盘菜单
   const trayMenuTemplate = [
     {
+      // 神知道为什么 linux 上无法识别 tray click、double-click，只能添加一个菜单
+      label: "显示主窗口",
+      click: () => {
+        showMainWindow();
+      },
+    },
+    {
       label: "设置",
       click: () => {
-        if (!SET_WINDOW) {
-          setSetup();
+        console.log("==>TRAY 打开设置窗口<==");
+        openSetWindow();
+      },
+    },
+    {
+      label: "软件日志",
+      click: () => {
+        console.log("==>TRAY 查看软件日志<==");
+        shell.openPath(logPath);
+      },
+    },
+    {
+      label: "打印记录",
+      click: () => {
+        console.log("==>TRAY 打开打印记录窗口<==");
+        if (!PRINT_LOG_WINDOW) {
+          printLogSetup();
         } else {
-          SET_WINDOW.show();
+          PRINT_LOG_WINDOW.show();
         }
       },
     },
     {
-      label: "查看日志",
+      label: "关于",
       click: () => {
-        shell.openPath(app.getPath("logs"));
-      }
+        console.log("==>TRAY 打开关于弹框<==");
+        showAboutDialog();
+      },
     },
     {
       label: "退出",
       click: () => {
+        console.log("==>TRAY 退出应用<==");
         helper.appQuit();
       },
     },
@@ -326,20 +414,8 @@ function initTray() {
 
   // 监听点击事件
   APP_TRAY.on("click", function() {
-    if (MAIN_WINDOW.isMinimized()) {
-      // 将窗口从最小化状态恢复到以前的状态
-      MAIN_WINDOW.restore();
-      MAIN_WINDOW.setSkipTaskbar(false);
-    }
-    if (!MAIN_WINDOW.isVisible()) {
-      // 主窗口关闭不会被销毁，只是隐藏，重新显示即可
-      MAIN_WINDOW.show();
-      MAIN_WINDOW.setSkipTaskbar(false);
-    }
-    if (!MAIN_WINDOW.isFocused()) {
-      // 主窗口未聚焦，使其聚焦
-      MAIN_WINDOW.focus();
-    }
+    console.log("==>TRAY 点击托盘图标<==");
+    showMainWindow();
   });
   return APP_TRAY;
 }

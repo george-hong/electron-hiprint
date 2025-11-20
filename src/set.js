@@ -1,8 +1,8 @@
 /*
  * @Date: 2023-09-05 17:34:28
  * @LastEditors: admin@54xavier.cn
- * @LastEditTime: 2024-04-05 10:06:51
- * @FilePath: \electron-hiprint\src\set.js
+ * @LastEditTime: 2024-12-22 16:50:24
+ * @FilePath: \xavier9896-electron-hiprint\src\set.js
  */
 "use strict";
 
@@ -12,10 +12,12 @@ const {
   BrowserView,
   ipcMain,
   dialog,
+  shell,
 } = require("electron");
 const path = require("path");
+const https = require("node:https");
+const fs = require("node:fs");
 const { store } = require("../tools/utils");
-const log = require("../tools/log");
 
 /**
  * @description: 创建设置窗口
@@ -23,8 +25,8 @@ const log = require("../tools/log");
  */
 async function createSetWindow() {
   const windowOptions = {
-    width: 400, // 窗口宽度
-    height: 600, // 窗口高度
+    width: 440, // 窗口宽度
+    height: 591, // 窗口高度
     title: "设置",
     useContentSize: true, // 窗口大小不包含边框
     center: true, // 居中
@@ -57,13 +59,18 @@ async function createSetWindow() {
   // 监听退出，移除所有事件
   SET_WINDOW.on("closed", removeEvent);
 
+  SET_WINDOW.webContents.on("did-finish-load", () => {
+    const downloadedVersions = getDownloadedVersions();
+    SET_WINDOW.webContents.send("downloadedVersions", downloadedVersions);
+  });
+
   return SET_WINDOW;
 }
 
 /**
  * @description: 加载等待页面，解决主窗口白屏问题
  * @param {Object} windowOptions 主窗口配置
- * @return {Void}
+ * @return {void}
  */
 function loadingView(windowOptions) {
   const loadingBrowserView = new BrowserView();
@@ -78,43 +85,65 @@ function loadingView(windowOptions) {
   const loadingHtml = path.join(
     "file://",
     app.getAppPath(),
-    "assets/loading.html"
+    "assets/loading.html",
   );
   loadingBrowserView.webContents.loadURL(loadingHtml);
 
-  // 主窗口 dom 加载完毕，移除 loadingBrowserView
+  // 设置窗口 dom 加载完毕，移除 loadingBrowserView
   SET_WINDOW.webContents.on("dom-ready", async (event) => {
+    loadingBrowserView.webContents.destroy();
     SET_WINDOW.removeBrowserView(loadingBrowserView);
   });
-}
-
-/**
- * @description: 渲染进程触发获取配置
- * @param {IpcMainEvent} event
- * @return {Void}
- */
-function getConfig(event) {
-  event.sender.send("onConfig", store.store);
 }
 
 /**
  * @description: 渲染进程触发写入配置
  * @param {IpcMainEvent} event
  * @param {Object} data 配置数据
- * @return {Void}
+ * @return {void}
  */
 function setConfig(event, data) {
-  log("==> 设置窗口：保存配置 <==");
+  console.log("==> 设置窗口：保存配置 <==");
   // 保存配置前，弹出 dialog 确认
   dialog
     .showMessageBox(SET_WINDOW, {
       type: "question",
       title: "提示",
-      message: "修改设置后需要立即重启，继续操作？",
+      message:
+        "保存设置需要重启软件，如有正在执行中的打印任务可能会被中断，是否确定要保存并重启？",
       buttons: ["确定", "取消"],
     })
     .then((res) => {
       if (res.response === 0) {
+        try {
+          let pdfPath = path.join(data.pdfPath, "url_pdf");
+          fs.mkdirSync(pdfPath, { recursive: true });
+          pdfPath = path.join(data.pdfPath, "blob_pdf");
+          fs.mkdirSync(pdfPath, { recursive: true });
+          pdfPath = path.join(data.pdfPath, "hiprint");
+          fs.mkdirSync(pdfPath, { recursive: true });
+        } catch {
+          dialog.showMessageBox(SET_WINDOW, {
+            type: "error",
+            title: "提示",
+            message: "pdf 保存路径无法写入数据，请重新设置！",
+            buttons: ["确定"],
+            noLink: true,
+          });
+          return;
+        }
+        try {
+          fs.accessSync(data.logPath, fs.constants.W_OK);
+        } catch (err) {
+          dialog.showMessageBox(SET_WINDOW, {
+            type: "error",
+            title: "提示",
+            message: "日志保存路径无法写入数据，请重新设置！",
+            buttons: ["确定"],
+            noLink: true,
+          });
+          return;
+        }
         store.set(data);
         setTimeout(() => {
           app.relaunch();
@@ -125,10 +154,69 @@ function setConfig(event, data) {
 }
 
 /**
+ * @description: 渲染进程触发下载插件
+ * @param {IpcMainEvent} event
+ * @param {Object} data 插件版本号
+ * @return {void}
+ */
+function downloadPlugin(event, data) {
+  const fileList = ["vue-plugin-hiprint.js", "print-lock.css"];
+  Promise.all(
+    fileList.map((url) => {
+      return new Promise((resolve, reject) => {
+        https.get(
+          `https://registry.npmmirror.com/vue-plugin-hiprint/${data}/files/dist/${url}`,
+          (res) => {
+            let filePath = "";
+            if (app.isPackaged) {
+              filePath = path.join(
+                app.getAppPath(),
+                "../",
+                `plugin/${data}_${url}`,
+              );
+            } else {
+              filePath = path.join(app.getAppPath(), `plugin/${data}_${url}`);
+            }
+            const fileStream = fs.createWriteStream(filePath);
+            res.pipe(fileStream);
+            res.on("end", () => {
+              resolve();
+            });
+            res.on("error", () => {
+              reject();
+            });
+          },
+        );
+      });
+    }),
+  )
+    .then(() => {
+      dialog.showMessageBox(SET_WINDOW, {
+        type: "info",
+        title: "提示",
+        message: "插件下载成功！",
+        buttons: ["确定"],
+        noLink: true,
+      });
+      const downloadedVersions = getDownloadedVersions();
+      SET_WINDOW.webContents.send("downloadedVersions", downloadedVersions);
+    })
+    .catch(() => {
+      dialog.showMessageBox(SET_WINDOW, {
+        type: "error",
+        title: "提示",
+        message: "插件下载失败！",
+        buttons: ["确定"],
+        noLink: true,
+      });
+    });
+}
+
+/**
  * @description: 渲染进程触发设置工作区大小
  * @param {IpcMainEvent} event
  * @param {Object} data {width, height[, animate]}
- * @return {Void}
+ * @return {void}
  */
 function setContentSize(event, data) {
   SET_WINDOW.setContentSize(data.width, data.height, data.animate ?? true);
@@ -138,17 +226,53 @@ function setContentSize(event, data) {
  * @description: 渲染进程触发弹出消息框
  * @param {IpcMainEvent} event
  * @param {Object} data https://www.electronjs.org/zh/docs/latest/api/dialog#dialogshowmessageboxbrowserwindow-options
- * @return {Void}
+ * @return {void}
  */
 function showMessageBox(event, data) {
-  dialog.showMessageBox(SET_WINDOW, data);
+  dialog.showMessageBox(SET_WINDOW, { noLink: true, ...data });
+}
+
+/**
+ * @description: 渲染进程触发选择目录
+ * @param {IpcMainEvent} event
+ * @param {Object} data https://www.electronjs.org/zh/docs/latest/api/dialog#dialogshowopendialogbrowserwindow-options
+ * @return {void}
+ */
+function showOpenDialog(event, data) {
+  dialog.showOpenDialog(SET_WINDOW, data).then((result) => {
+    if (!result.canceled) {
+      try {
+        fs.accessSync(result.filePaths[0], fs.constants.W_OK);
+      } catch {
+        dialog.showMessageBox(SET_WINDOW, {
+          type: "error",
+          title: "提示",
+          message: "路径无法写入，请重新选择！",
+          buttons: ["确定"],
+          noLink: true,
+        });
+        result.canceled = true;
+      }
+    }
+    event.reply("openDialog", result);
+  });
+}
+
+/**
+ * @description: 渲染进程触发打开目录
+ * @param {IpcMainEvent} event
+ * @param {Object} data 目录路径
+ * @return {void}
+ */
+function openDirectory(event, data) {
+  shell.openPath(data);
 }
 
 /**
  * @description: 渲染进程触发测试连接中转服务
  * @param {IpcMainEvent} event
  * @param {Object} data {url, token}
- * @return {Void}
+ * @return {void}
  */
 function testTransit(event, data) {
   const { io } = require("socket.io-client");
@@ -170,6 +294,7 @@ function testTransit(event, data) {
       title: "提示",
       message: `${err.message}，请检查设置！`,
       buttons: ["确定"],
+      noLink: true,
     });
     socket.close();
   });
@@ -181,14 +306,32 @@ function testTransit(event, data) {
       title: "提示",
       message: "连接成功！",
       buttons: ["确定"],
+      noLink: true,
     });
+  });
+
+  // 中转服务信息
+  socket.on("serverInfo", (data) => {
+    // TODO: 根据服务器返回信息判断服务器是否满足连接条件
+    // {
+    //   version: '0.0.4', // 中转服务版本号
+    //   currentClients: 1, // 当前 token client 连接数
+    //   allClients: 1, // 所有 token client 连接数
+    //   webClients: 1, // web client 连接数
+    //   allWebClients: 1, // 所有 web client 连接数
+    //   totalmem: 17179869184, // 总内存
+    //   freemem: 94961664, // 可用内存
+    // }
+
+    console.log(data);
+    // 关闭测试连接
     socket.close();
   });
 }
 
 /**
  * @description: 关闭设置窗口
- * @return {Void}
+ * @return {void}
  */
 function closeSetWindow() {
   SET_WINDOW && SET_WINDOW.close();
@@ -196,29 +339,67 @@ function closeSetWindow() {
 
 /**
  * @description: 绑定设置窗口事件
- * @return {Void}
+ * @return {void}
  */
 function initSetEvent() {
-  ipcMain.on("getConfig", getConfig);
   ipcMain.on("setConfig", setConfig);
   ipcMain.on("setContentSize", setContentSize);
   ipcMain.on("showMessageBox", showMessageBox);
+  ipcMain.on("showOpenDialog", showOpenDialog);
+  ipcMain.on("openDirectory", openDirectory);
   ipcMain.on("testTransit", testTransit);
   ipcMain.on("closeSetWindow", closeSetWindow);
+  ipcMain.on("downloadPlugin", downloadPlugin);
+  ipcMain.on("getPrintersList", getPrintersList);
 }
 
 /**
  * @description: 移除所有事件
- * @return {Void}
+ * @return {void}
  */
 function removeEvent() {
-  ipcMain.removeListener("getConfig", getConfig);
   ipcMain.removeListener("setConfig", setConfig);
   ipcMain.removeListener("setContentSize", setContentSize);
   ipcMain.removeListener("showMessageBox", showMessageBox);
+  ipcMain.removeListener("showOpenDialog", showOpenDialog);
+  ipcMain.removeListener("openDirectory", openDirectory);
   ipcMain.removeListener("testTransit", testTransit);
   ipcMain.removeListener("closeSetWindow", closeSetWindow);
+  ipcMain.removeListener("downloadPlugin", downloadPlugin);
+  ipcMain.removeListener("getPrintersList", getPrintersList);
   SET_WINDOW = null;
+}
+
+function getDownloadedVersions() {
+  let pluginDir = path.join(app.getAppPath(), "plugin");
+  if (app.isPackaged) {
+    pluginDir = path.join(app.getAppPath(), "../", "plugin");
+  }
+  if (!fs.existsSync(pluginDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(pluginDir)
+    .filter((file) => file.endsWith(".js")) // 假设插件文件以 .js 结尾
+    .map((file) => file.split("_")[0]); // 提取版本号
+}
+
+/**
+ * @description: 获取打印机列表并发送给渲染进程
+ * @param {IpcMainEvent} event
+ * @return {void}
+ */
+async function getPrintersList(event) {
+  try {
+    const printers = await SET_WINDOW.webContents.getPrintersAsync();
+    let list = printers.map((item) => {
+      return { value: item.name };
+    });
+    SET_WINDOW.webContents.send("getPrintersList", list);
+  } catch (error) {
+    console.error("获取打印机列表失败:", error);
+    SET_WINDOW.webContents.send("getPrintersList", []);
+  }
 }
 
 module.exports = async () => {
