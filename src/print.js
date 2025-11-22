@@ -489,19 +489,12 @@ function initPrintEvent() {
     }
     let deviceName = defaultPrinter;
 
-    // 1. 定义 PDF 尺寸（示例：宽 10cm，高 15cm，也可使用 'mm'、'px' 等单位）
     const {
       unit,
       width: pdfWidth,
       height: pdfHeight,
       base64: base64Image,
     } = data;
-
-    // 2. 初始化 PDF 实例
-    const pdf = new jspdf({
-      unit: unit, // 设置单位
-      format: [pdfWidth, pdfHeight], // 设置 PDF 宽高
-    });
 
     // 3. 计算图片在 PDF 中的尺寸（可选：铺满 PDF 或自定义大小）
     // 方案 A：图片铺满整个 PDF 页面（保持比例，避免拉伸）
@@ -521,50 +514,76 @@ function initPrintEvent() {
     const x = (pdfWidth - scaledWidth) / 2;
     const y = (pdfHeight - scaledHeight) / 2;
 
+    // 为避免jsPDF宽高对调bug，强制指定orientation
+    let orientation = "portrait";
+    if (pdfWidth > pdfHeight) {
+      orientation = "landscape";
+    }
+
+    // 创建PDF并指定匡高，此时指定的unit会贯穿后续操作
+    const pdf = new jspdf({
+      unit: unit, // 设置单位
+      orientation,
+      format: [pdfWidth, pdfHeight], // 设置 PDF 宽高
+    });
+
     // 4. 将图片添加到 PDF 中
     pdf.addImage(
       base64Image, // Base64 图片内容
       "JPEG", // 图片格式
-      x, // 左上角 x 坐标（单位：cm）
-      y, // 左上角 y 坐标（单位：cm）
-      pdfWidth, // 图片宽度（单位：cm）
-      pdfHeight, // 图片高度（单位：cm）
+      0,  // 图片左上角 X 坐标
+      0, // 图片左上角 Y 坐标
+      pdfWidth / 2, // 图片宽度,目前等于指定模版宽度，不应拉伸，否则会模糊
+      pdfHeight/ 2, // 图片高度,目前等于指定模版高度，不应拉伸，否则会模糊
     );
 
-    pdf.text('hello', 1, 1)
-
-// 替换原来的 pdf.save('temp.pdf') 和 pdf.output("blob")
+    // 生成Buffer
     const pdfArrayBuffer = pdf.output('arraybuffer');
     const pdfBuffer = Buffer.from(pdfArrayBuffer);
 
-// 如果你想保存到特定路径
-    const savePath = path.join(os.tmpdir(), "temp.pdf");
-    // const savePath = path.join(store.get("pdfPath") || os.tmpdir(), "temp.pdf");
+    // 保存到特定路径
+    const savePath = path.join(store.get("pdfPath") || os.tmpdir(), "temp.pdf");
     fs.writeFileSync(savePath, pdfBuffer);
 
-    realPrint(savePath, 'Microsoft Print to PDF', data)
-    // TODO 结束打印任务
-
-    printPdfBlob(pdfBlob, deviceName, data).then(() => {
-      console.log(
-        `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
-          data.templateId
-        }】 打印成功，打印类型：BLOB_PDF，打印机：${deviceName}，页数：${
-          data.pageNum
-        }`,
-      );
-      if (socket) {
-        checkPrinterStatus(deviceName, () => {
-          const result = {
-            msg: "打印成功",
-            templateId: data.templateId,
-            replyId: data.replyId,
-          };
-          socket.emit("success", result);
-        });
+    const onFinally = () => {
+      if (data.taskId) {
+        // 通过taskMap 调用 task done 回调
+        PRINT_RUNNER_DONE[data.taskId]();
+        // 删除 task
+        delete PRINT_RUNNER_DONE[data.taskId];
       }
-      logPrintResult("success");
-    });
+      MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+    }
+
+    const onSuccess = () => {
+      if (socket) {
+        const result = {
+          msg: "打印成功",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        };
+        socket.emit("success", result);
+      }
+      onFinally()
+    }
+
+    const onFail = (err) => {
+      socket &&
+      socket.emit("error", {
+        msg: "打印失败: " + err.message,
+        templateId: data.templateId,
+        replyId: data.replyId,
+      });
+      onFinally()
+    }
+
+    const printOptions = {
+      orientation,
+      printer: defaultPrinter,
+      scale: 'fit',
+    }
+
+    realPrint(savePath, deviceName, printOptions, onSuccess, onFail)
   });
 }
 

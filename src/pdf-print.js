@@ -33,7 +33,6 @@ const realPrint = (pdfPath, printer, data, resolve, reject) => {
   if (process.platform === "win32") {
     data = Object.assign({}, data);
     data.printer = printer;
-    console.log("print pdf:" + pdfPath + JSON.stringify(data));
     // 参数见 node_modules/pdf-to-printer/dist/print/print.d.ts
     // pdf打印文档：https://www.sumatrapdfreader.org/docs/Command-line-arguments
     // pdf-to-printer 源码: https://github.com/artiebits/pdf-to-printer

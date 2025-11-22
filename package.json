@@ -5,7 +5,7 @@
   "main": "main.js",
   "author": "CcSimple<840054486@qq.com>",
   "license": "MIT",
-  "homepage": "https://gitee.com/CcSimple",
+  "homepage": "https://gitee.com/CcSimnpmple",
   "scripts": {
     "start": "node start.js",
     "postinstall": "npm run fix-sqlite3",
