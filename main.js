@@ -167,7 +167,7 @@ async function initialize() {
   app.whenReady().then(() => {
     // 创建浏览器窗口
     createWindow();
-    app.on("activate", function() {
+    app.on("activate", function () {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
       }
@@ -413,7 +413,7 @@ function initTray() {
   APP_TRAY.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate));
 
   // 监听点击事件
-  APP_TRAY.on("click", function() {
+  APP_TRAY.on("click", function () {
     console.log("==>TRAY 点击托盘图标<==");
     showMainWindow();
   });
