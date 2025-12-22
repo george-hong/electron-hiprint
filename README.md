@@ -797,3 +797,7 @@ this.$error({
 ## 感谢
 
 logo 设计：[橙色](mailto:tong567@foxmail.com)
+
+## 注意事项
+- node版本 建议使用 16.x 版本
+- npm源使用cnpm，但下载依赖需要使用npm,否则打包后运行可能报错

@@ -8,7 +8,7 @@
   "homepage": "https://gitee.com/CcSimnpmple",
   "scripts": {
     "start": "node start.js",
-    "postinstall": "npm run fix-sqlite3",  
+    "postinstall": "npm run fix-sqlite3",
     "fix-sqlite3": "node ./build/fixSqlite3bug.js",
     "build-w": "electron-builder -w nsis:ia32 && node ./tools/rename --tag win_x32",
     "build-w-64": "electron-builder -w nsis:x64 && node ./tools/rename --tag win_x64",
@@ -24,6 +24,7 @@
     "releases": "npm run compress && npm run build-all && npm run restore"
   },
   "build": {
+    "npmRebuild": false,
     "productName": "hiprint",
     "appId": "com.simple.cc.hiprint",
     "copyright": "CcSimple<840054486@qq.com>",
@@ -109,7 +110,7 @@
     "pdf-to-printer": "^5.6.0",
     "socket.io": "^3.1.0",
     "socket.io-client": "^3.1.0",
-    "sqlite3": "5.1.7",
+    "sqlite3": "^5.1.7",
     "unix-print": "^1.2.0",
     "uuid": "^11.0.3",
     "win32-pdf-printer": "^4.0.1"
