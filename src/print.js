@@ -752,6 +752,190 @@ function initPrintEvent() {
       onFail({ message: '文件写入失败' })
     }
   });
+
+  ipcMain.on("printSVGBatch", async (event, data) => {
+    let socket = null;
+    if (data.clientType === "local") {
+      socket = SOCKET_SERVER.sockets.sockets.get(data.socketId);
+    } else {
+      socket = SOCKET_CLIENT;
+    }
+
+    const onFinally = () => {
+      if (data.taskId) {
+        PRINT_RUNNER_DONE[data.taskId]();
+        delete PRINT_RUNNER_DONE[data.taskId];
+      }
+      MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+    };
+
+    const onFail = (err) => {
+      socket &&
+        socket.emit("error", {
+          msg: "打印失败: " + err.message,
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      onFinally();
+    };
+
+    const onSuccess = () => {
+      if (socket) {
+        socket.emit("success", {
+          msg: "打印成功",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      }
+      onFinally();
+    };
+
+    const printers = await PRINT_WINDOW.webContents.getPrintersAsync();
+    let defaultPrinter = data.printer || store.get("defaultPrinter", "");
+    let printerError = false;
+    printers.forEach((element) => {
+      if (
+        element.isDefault &&
+        (defaultPrinter == "" || defaultPrinter == void 0)
+      ) {
+        defaultPrinter = element.name;
+      }
+      if (element.name === defaultPrinter) {
+        if (process.platform === "win32") {
+          if (element.status != 0) {
+            printerError = true;
+          }
+        } else {
+          if (element.status != 3) {
+            printerError = true;
+          }
+        }
+      }
+    });
+
+    if (printerError) {
+      const { StatusMsg } = getCurrentPrintStatusByName(defaultPrinter);
+      console.log(
+        `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
+        }】 打印失败，打印机异常，打印机：${defaultPrinter}, 打印机状态：${StatusMsg}`,
+      );
+      socket &&
+        socket.emit("error", {
+          msg: data.printer + "打印机异常",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      onFinally();
+      return;
+    }
+
+    try {
+      const svgList = Array.isArray(data.svgList) ? data.svgList : [];
+      if (!svgList.length) {
+        throw new Error("svgList 不能为空");
+      }
+
+      const svgPages = svgList.map((item, index) => {
+        const raw = typeof item === "string" ? item : "";
+        let svgContent = raw;
+        try {
+          svgContent = JSON.parse(raw);
+        } catch (_) {
+          // 兼容已是原始 SVG 字符串的情况
+        }
+        if (typeof svgContent !== "string") {
+          throw new Error(`第 ${index + 1} 个 SVG 解析失败`);
+        }
+        const trimmedSvg = svgContent.trim();
+        const svgStart = trimmedSvg.toLowerCase().indexOf("<svg");
+        const svgEnd = trimmedSvg.toLowerCase().lastIndexOf("</svg>");
+        if (svgStart < 0 || svgEnd < 0 || svgEnd < svgStart) {
+          throw new Error(`第 ${index + 1} 个 SVG 内容无效`);
+        }
+        const normalizedSvg = trimmedSvg.slice(svgStart, svgEnd + "</svg>".length);
+        if (!normalizedSvg.toLowerCase().startsWith("<svg")) {
+          throw new Error(`第 ${index + 1} 个 SVG 内容无效`);
+        }
+        return `<div class="svg-page">${normalizedSvg}</div>`;
+      });
+
+      const htmlString = JSON.stringify(svgPages.join(""));
+      const styleString = JSON.stringify(`
+        #printElement {
+          margin: 0;
+          padding: 0;
+        }
+        .svg-page {
+          page-break-after: always;
+          break-after: page;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .svg-page:last-child {
+          page-break-after: auto;
+          break-after: auto;
+        }
+        .svg-page svg {
+          display: block;
+          max-width: 100%;
+          max-height: 100%;
+        }
+      `);
+      const titleString = JSON.stringify(data.title ? data.title : "SVG批量打印");
+      await PRINT_WINDOW.webContents.executeJavaScript(`
+        document.title = ${titleString};
+        const styleId = "svg-batch-print-style";
+        const oldStyle = document.getElementById(styleId);
+        if (oldStyle) {
+          oldStyle.remove();
+        }
+        const styleElement = document.createElement("style");
+        styleElement.id = styleId;
+        styleElement.textContent = ${styleString};
+        document.head.appendChild(styleElement);
+        const printElement = document.getElementById("printElement");
+        if (!printElement) {
+          throw new Error("找不到printElement容器");
+        }
+        printElement.innerHTML = ${htmlString};
+        true;
+      `);
+
+      PRINT_WINDOW.webContents.print(
+        {
+          silent: data.silent ?? true,
+          printBackground: data.printBackground ?? true,
+          deviceName: defaultPrinter,
+          color: data.color ?? true,
+          margins: data.margins ?? {
+            marginType: "none",
+          },
+          landscape: data.landscape ?? false,
+          scaleFactor: data.scaleFactor ?? 100,
+          pagesPerSheet: data.pagesPerSheet ?? 1,
+          collate: data.collate ?? true,
+          copies: data.copies ?? 1,
+          pageRanges: data.pageRanges ?? {},
+          duplexMode: data.duplexMode,
+          dpi: data.dpi ?? 300,
+          header: data.header,
+          footer: data.footer,
+          pageSize: data.pageSize,
+        },
+        (success, failureReason) => {
+          if (success) {
+            onSuccess();
+            return;
+          }
+          onFail({ message: failureReason || "未知错误" });
+        },
+      );
+    } catch (error) {
+      onFail({ message: error.message || "SVG 批量打印失败" });
+    }
+  });
 }
 
 function checkPrinterStatus(deviceName, callback) {

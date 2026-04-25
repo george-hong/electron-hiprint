@@ -575,23 +575,23 @@ function initServeEvent(server) {
             updateTime: 0,
             width: 0,
             height: 0,
-            unit: 'mm',
+            unit: "mm",
             horizontalMargin: 0,
             verticalMargin: 0,
             boxMargin: 0,
             col: 1, // 标签列数，默认1列
-            printer: '',
+            printer: "",
           });
         // 设置元信息
         if (index === 0) {
           currentInfo.width = data.width || 0;
           currentInfo.height = data.height || 0;
-          currentInfo.unit = data.unit || 'mm';
+          currentInfo.unit = data.unit || "mm";
           currentInfo.horizontalMargin = data.horizontalMargin || 0;
           currentInfo.verticalMargin = data.verticalMargin || 0;
           currentInfo.boxMargin = data.boxMargin || 0;
           currentInfo.col = data.col || 1; // 标签列数，默认1列
-          currentInfo.printer = data.printer || '';
+          currentInfo.printer = data.printer || "";
         }
         // 添加片段信息
         currentInfo.base64List[index] = base64;
@@ -609,6 +609,61 @@ function initServeEvent(server) {
             currentInfo.taskId = uuidv7();
             currentInfo.clientType = "local";
             PRINT_WINDOW.webContents.send("printPDFBatch", currentInfo);
+            MAIN_WINDOW.webContents.send("printTask", true);
+            PRINT_RUNNER_DONE[currentInfo.taskId] = done;
+          });
+        }
+        // 开始检查任务
+        watchTaskInstance.startWatch();
+      }
+    });
+
+    socket.on("printSVGBatch", (data) => {
+      if (data) {
+        const { total, index, svg, id } = data;
+        const currentInfo =
+          PRINT_FRAGMENTS_MAPPING[id] ||
+          (PRINT_FRAGMENTS_MAPPING[id] = {
+            total,
+            svgList: [],
+            count: 0,
+            updateTime: 0,
+            width: 0,
+            height: 0,
+            unit: "mm",
+            horizontalMargin: 0,
+            verticalMargin: 0,
+            boxMargin: 0,
+            col: 1, // 标签列数，默认1列
+            printer: "",
+          });
+        // 设置元信息
+        if (index === 0) {
+          currentInfo.width = data.width || 0;
+          currentInfo.height = data.height || 0;
+          currentInfo.unit = data.unit || "mm";
+          currentInfo.horizontalMargin = data.horizontalMargin || 0;
+          currentInfo.verticalMargin = data.verticalMargin || 0;
+          currentInfo.boxMargin = data.boxMargin || 0;
+          currentInfo.col = data.col || 1; // 标签列数，默认1列
+          currentInfo.printer = data.printer || "";
+        }
+        // 添加片段信息
+        currentInfo.svgList[index] = svg;
+        // 计数
+        currentInfo.count++;
+        // 记录更新时间
+        currentInfo.updateTime = Date.now();
+        // 全部片段已传输完毕
+        if (currentInfo.count === currentInfo.total) {
+          // 清除全局缓存
+          delete PRINT_FRAGMENTS_MAPPING[id];
+          // 添加打印任务
+          PRINT_RUNNER.add((done) => {
+            currentInfo.socketId = socket.id;
+            currentInfo.taskId = uuidv7();
+            currentInfo.clientType = "local";
+            PRINT_WINDOW.webContents.send("printSVGBatch", currentInfo);
             MAIN_WINDOW.webContents.send("printTask", true);
             PRINT_RUNNER_DONE[currentInfo.taskId] = done;
           });
