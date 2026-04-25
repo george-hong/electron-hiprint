@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
+const { pathToFileURL } = require("url");
 const { printPdf, printPdfBlob, realPrint } = require("./pdf-print");
 const { store, getCurrentPrintStatusByName } = require("../tools/utils");
 const db = require("../tools/database");
@@ -859,8 +860,6 @@ function initPrintEvent() {
         return `<div class="svg-page">${normalizedSvg}</div>`;
       });
 
-      const htmlBody = svgPages.join("");
-      const htmlString = JSON.stringify(htmlBody);
       const svgBatchStylePath = path.join(
         app.getAppPath(),
         "assets",
@@ -868,78 +867,106 @@ function initPrintEvent() {
         "svg-batch-print.css",
       );
       const styleContent = fs.readFileSync(svgBatchStylePath, "utf8");
-      const styleString = JSON.stringify(styleContent);
-      const titleString = JSON.stringify(data.title ? data.title : "SVG批量打印");
 
-      const tempHtmlPath = path.join(store.get("pdfPath") || os.tmpdir(), "temp.html");
-      fs.mkdirSync(path.dirname(tempHtmlPath), { recursive: true });
-      fs.writeFileSync(
-        tempHtmlPath,
-        `<!DOCTYPE html>
+      const tempHtmlDir = store.get("pdfPath") || os.tmpdir();
+      fs.mkdirSync(tempHtmlDir, { recursive: true });
+
+      const htmlFiles = svgPages.map((svgPage, index) => {
+        const fileName = `temp-${index + 1}.html`;
+        const tempHtmlPath = path.join(tempHtmlDir, fileName);
+        fs.writeFileSync(
+          tempHtmlPath,
+          `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>${data.title ? data.title : "SVG批量打印"}</title>
+  <title>${data.title ? data.title : "SVG批量打印"}-${index + 1}</title>
   <style>${styleContent}</style>
 </head>
 <body>
-  <div id="printElement">${htmlBody}</div>
+  <div id="printElement">${svgPage}</div>
 </body>
 </html>`,
-        "utf8",
-      );
-      console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
+          "utf8",
+        );
+        console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
+        return tempHtmlPath;
+      });
 
-      await PRINT_WINDOW.webContents.executeJavaScript(`
-        (() => {
-          document.title = ${titleString};
-          const styleId = "svg-batch-print-style";
-          const oldStyle = document.getElementById(styleId);
-          if (oldStyle) {
-            oldStyle.remove();
-          }
-          const styleElement = document.createElement("style");
-          styleElement.id = styleId;
-          styleElement.textContent = ${styleString};
-          document.head.appendChild(styleElement);
-          const printElement = document.getElementById("printElement");
-          if (!printElement) {
-            throw new Error("找不到printElement容器");
-          }
-          printElement.innerHTML = ${htmlString};
-          return true;
-        })();
-      `);
-
-      PRINT_WINDOW.webContents.print(
-        {
-          silent: data.silent ?? true,
-          printBackground: data.printBackground ?? true,
-          deviceName: defaultPrinter,
-          color: data.color ?? true,
-          margins: data.margins ?? {
-            marginType: "none",
-          },
-          landscape: data.landscape ?? false,
-          scaleFactor: data.scaleFactor ?? 100,
-          pagesPerSheet: data.pagesPerSheet ?? 1,
-          collate: data.collate ?? true,
-          copies: data.copies ?? 1,
-          pageRanges: data.pageRanges ?? {},
-          duplexMode: data.duplexMode,
-          dpi: data.dpi ?? 300,
-          header: data.header,
-          footer: data.footer,
-          pageSize: data.pageSize,
+      const pageRanges =
+        typeof data.pageRanges === "string" ? data.pageRanges : undefined;
+      const printOptions = {
+        silent: data.silent ?? true,
+        printBackground: data.printBackground ?? true,
+        deviceName: defaultPrinter,
+        color: data.color ?? true,
+        margins: data.margins ?? {
+          marginType: "none",
         },
-        (success, failureReason) => {
-          if (success) {
-            onSuccess();
+        landscape: data.landscape ?? false,
+        scaleFactor: data.scaleFactor ?? 100,
+        pagesPerSheet: data.pagesPerSheet ?? 1,
+        collate: data.collate ?? true,
+        copies: data.copies ?? 1,
+        pageRanges,
+        duplexMode: data.duplexMode,
+        dpi: data.dpi ?? 300,
+        header: data.header,
+        footer: data.footer,
+        pageSize: data.pageSize,
+      };
+
+      const printSingleHtml = (tempHtmlPath, pageIndex, totalPages) => new Promise((resolve, reject) => {
+        const tempPrintWindow = new BrowserWindow({
+          width: 100,
+          height: 100,
+          show: false,
+          webPreferences: {
+            contextIsolation: false,
+            nodeIntegration: true,
+          },
+          backgroundColor: "#fff",
+        });
+
+        let settled = false;
+        const done = (err) => {
+          if (settled) return;
+          settled = true;
+          if (!tempPrintWindow.isDestroyed()) {
+            tempPrintWindow.destroy();
+          }
+          if (err) {
+            reject(err);
             return;
           }
-          onFail({ message: failureReason || "未知错误" });
-        },
-      );
+          resolve();
+        };
+
+        tempPrintWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription) => {
+          done(new Error(`第${pageIndex + 1}/${totalPages}页临时HTML加载失败(${errorCode}): ${errorDescription}`));
+        });
+
+        tempPrintWindow
+          .loadURL(pathToFileURL(tempHtmlPath).href)
+          .then(() => {
+            tempPrintWindow.webContents.print(printOptions, (success, failureReason) => {
+              if (!success) {
+                done(new Error(`第${pageIndex + 1}/${totalPages}页打印失败: ${failureReason || "未知错误"}`));
+                return;
+              }
+              done();
+            });
+          })
+          .catch((err) => {
+            done(new Error(`第${pageIndex + 1}/${totalPages}页加载异常: ${err.message}`));
+          });
+      });
+
+      for (let i = 0; i < htmlFiles.length; i++) {
+        await printSingleHtml(htmlFiles[i], i, htmlFiles.length);
+      }
+
+      onSuccess();
     } catch (error) {
       onFail({ message: error.message || "SVG 批量打印失败" });
     }
