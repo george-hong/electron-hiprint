@@ -885,22 +885,24 @@ function initPrintEvent() {
       `);
       const titleString = JSON.stringify(data.title ? data.title : "SVG批量打印");
       await PRINT_WINDOW.webContents.executeJavaScript(`
-        document.title = ${titleString};
-        const styleId = "svg-batch-print-style";
-        const oldStyle = document.getElementById(styleId);
-        if (oldStyle) {
-          oldStyle.remove();
-        }
-        const styleElement = document.createElement("style");
-        styleElement.id = styleId;
-        styleElement.textContent = ${styleString};
-        document.head.appendChild(styleElement);
-        const printElement = document.getElementById("printElement");
-        if (!printElement) {
-          throw new Error("找不到printElement容器");
-        }
-        printElement.innerHTML = ${htmlString};
-        true;
+        (() => {
+          document.title = ${titleString};
+          const styleId = "svg-batch-print-style";
+          const oldStyle = document.getElementById(styleId);
+          if (oldStyle) {
+            oldStyle.remove();
+          }
+          const styleElement = document.createElement("style");
+          styleElement.id = styleId;
+          styleElement.textContent = ${styleString};
+          document.head.appendChild(styleElement);
+          const printElement = document.getElementById("printElement");
+          if (!printElement) {
+            throw new Error("找不到printElement容器");
+          }
+          printElement.innerHTML = ${htmlString};
+          return true;
+        })();
       `);
 
       PRINT_WINDOW.webContents.print(
