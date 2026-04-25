@@ -859,31 +859,37 @@ function initPrintEvent() {
         return `<div class="svg-page">${normalizedSvg}</div>`;
       });
 
-      const htmlString = JSON.stringify(svgPages.join(""));
-      const styleString = JSON.stringify(`
-        #printElement {
-          margin: 0;
-          padding: 0;
-        }
-        .svg-page {
-          page-break-after: always;
-          break-after: page;
-          width: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .svg-page:last-child {
-          page-break-after: auto;
-          break-after: auto;
-        }
-        .svg-page svg {
-          display: block;
-          max-width: 100%;
-          max-height: 100%;
-        }
-      `);
+      const htmlBody = svgPages.join("");
+      const htmlString = JSON.stringify(htmlBody);
+      const svgBatchStylePath = path.join(
+        app.getAppPath(),
+        "assets",
+        "css",
+        "svg-batch-print.css",
+      );
+      const styleContent = fs.readFileSync(svgBatchStylePath, "utf8");
+      const styleString = JSON.stringify(styleContent);
       const titleString = JSON.stringify(data.title ? data.title : "SVG批量打印");
+
+      const tempHtmlPath = path.join(store.get("pdfPath") || os.tmpdir(), "temp.html");
+      fs.mkdirSync(path.dirname(tempHtmlPath), { recursive: true });
+      fs.writeFileSync(
+        tempHtmlPath,
+        `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>${data.title ? data.title : "SVG批量打印"}</title>
+  <style>${styleContent}</style>
+</head>
+<body>
+  <div id="printElement">${htmlBody}</div>
+</body>
+</html>`,
+        "utf8",
+      );
+      console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
+
       await PRINT_WINDOW.webContents.executeJavaScript(`
         (() => {
           document.title = ${titleString};
