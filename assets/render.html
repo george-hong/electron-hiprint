@@ -154,14 +154,15 @@
           });
         };
         script.onerror = () => {
-          ipcRenderer.send("showMessageBox", {
-            title: "插件加载错误",
-            message: `无法从插件缓存中加载【${store.get(
-              "pluginVersion",
-            )}】版本，请重新在设置中指定版本！`,
-            type: "error",
-            buttons: ["我知道了"],
-          });
+          console.log('插件加载错误')
+          // ipcRenderer.send("showMessageBox", {
+          //   title: "插件加载错误",
+          //   message: `无法从插件缓存中加载【${store.get(
+          //     "pluginVersion",
+          //   )}】版本，请重新在设置中指定版本！`,
+          //   type: "error",
+          //   buttons: ["我知道了"],
+          // });
         };
 
         const head = document.querySelector("head");
