@@ -45,8 +45,8 @@ async function createSetWindow() {
   loadingView(windowOptions);
 
   // 加载设置渲染进程页面
-  const setHtmlUrl = path.join("file://", app.getAppPath(), "assets/set.html");
-  SET_WINDOW.webContents.loadURL(setHtmlUrl);
+  const setHtmlUrl = path.join(app.getAppPath(), "assets/set.html");
+  SET_WINDOW.webContents.loadFile(setHtmlUrl);
 
   // 未打包时打开开发者工具
   if (!app.isPackaged) {
@@ -82,12 +82,8 @@ function loadingView(windowOptions) {
     height: windowOptions.height,
   });
 
-  const loadingHtml = path.join(
-    "file://",
-    app.getAppPath(),
-    "assets/loading.html",
-  );
-  loadingBrowserView.webContents.loadURL(loadingHtml);
+  const loadingHtml = path.join(app.getAppPath(), "assets/loading.html");
+  loadingBrowserView.webContents.loadFile(loadingHtml);
 
   // 设置窗口 dom 加载完毕，移除 loadingBrowserView
   SET_WINDOW.webContents.on("dom-ready", async (event) => {

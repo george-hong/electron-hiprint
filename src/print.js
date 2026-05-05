@@ -6,7 +6,7 @@ const os = require("os");
 const fs = require("fs");
 const { pathToFileURL } = require("url");
 const { printPdf, printPdfBlob, realPrint } = require("./pdf-print");
-const { store, getCurrentPrintStatusByName } = require("../tools/utils");
+const { store } = require("../tools/utils");
 const db = require("../tools/database");
 const dayjs = require("dayjs");
 const { v7: uuidv7 } = require("uuid");
@@ -35,6 +35,70 @@ function getBase64ImageDimensions(base64WithPrefix) {
   }
 }
 
+function resolveTargetPrinter(printers, preferredPrinter) {
+  let printerName = preferredPrinter || "";
+  if (!printerName) {
+    printerName = (printers.find((item) => item.isDefault) || {}).name || "";
+  }
+  if (!printerName && printers.length) {
+    printerName = printers[0].name;
+  }
+  const printerInfo = printers.find((item) => item.name === printerName);
+  return {
+    printerName,
+    printerInfo,
+    exists: Boolean(printerInfo),
+  };
+}
+
+function normalizePrintUnit(unit) {
+  const val = `${unit || "mm"}`.toLowerCase();
+  if (["mm", "cm", "in", "inch", "px", "pt"].includes(val)) {
+    return val === "inch" ? "in" : val;
+  }
+  return "mm";
+}
+
+function convertUnitToPx(value, unit) {
+  const num = Number(value);
+  if (!(num > 0)) return 0;
+  const normalizedUnit = normalizePrintUnit(unit);
+  switch (normalizedUnit) {
+    case "mm":
+      return Math.ceil((num * 96) / 25.4);
+    case "cm":
+      return Math.ceil((num * 96) / 2.54);
+    case "in":
+      return Math.ceil(num * 96);
+    case "pt":
+      return Math.ceil((num * 96) / 72);
+    case "px":
+      return Math.ceil(num);
+    default:
+      return Math.ceil((num * 96) / 25.4);
+  }
+}
+
+function convertUnitToMicrons(value, unit) {
+  const num = Number(value);
+  if (!(num > 0)) return 0;
+  const normalizedUnit = normalizePrintUnit(unit);
+  switch (normalizedUnit) {
+    case "mm":
+      return Math.round(num * 1000);
+    case "cm":
+      return Math.round(num * 10000);
+    case "in":
+      return Math.round(num * 25400);
+    case "pt":
+      return Math.round((num / 72) * 25400);
+    case "px":
+      return Math.round((num / 96) * 25400);
+    default:
+      return Math.round(num * 1000);
+  }
+}
+
 /**
  * @description: 创建打印窗口
  * @return {BrowserWindow} PRINT_WINDOW 打印窗口
@@ -57,8 +121,8 @@ async function createPrintWindow() {
   PRINT_WINDOW = new BrowserWindow(windowOptions);
 
   // 加载打印渲染进程页面
-  let printHtml = path.join("file://", app.getAppPath(), "/assets/print.html");
-  PRINT_WINDOW.webContents.loadURL(printHtml);
+  let printHtml = path.join(app.getAppPath(), "assets/print.html");
+  PRINT_WINDOW.webContents.loadFile(printHtml);
 
   // 未打包时打开开发者工具
   // if (!app.isPackaged) {
@@ -84,43 +148,19 @@ function initPrintEvent() {
       socket = SOCKET_CLIENT;
     }
     const printers = await PRINT_WINDOW.webContents.getPrintersAsync();
-    let havePrinter = false;
-    let defaultPrinter = data.printer || store.get("defaultPrinter", "");
-    let printerError = false;
-    printers.forEach((element) => {
-      // 获取默认打印机
-      if (
-        element.isDefault &&
-        (defaultPrinter == "" || defaultPrinter == void 0)
-      ) {
-        defaultPrinter = element.name;
-      }
-      // 判断打印机是否存在
-      if (element.name === defaultPrinter) {
-        // todo: 打印机状态对照表
-        // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
-        // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
-        if (process.platform === "win32") {
-          if (element.status != 0) {
-            printerError = true;
-          }
-        } else {
-          if (element.status != 3) {
-            printerError = true;
-          }
-        }
-        havePrinter = true;
-      }
-    });
-    if (printerError) {
-      const { StatusMsg } = getCurrentPrintStatusByName(defaultPrinter);
+    const {
+      printerName: defaultPrinter,
+      printerInfo: currentPrinter,
+      exists: havePrinter,
+    } = resolveTargetPrinter(printers, data.printer || store.get("defaultPrinter", ""));
+    if (!havePrinter) {
       console.log(
         `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${data.templateId
-        }】 打印失败，打印机异常，打印机：${defaultPrinter}, 打印机状态：${StatusMsg}`,
+        }】 打印失败，打印机不存在，打印机：${defaultPrinter || data.printer || "未指定"}`,
       );
       socket &&
         socket.emit("error", {
-          msg: data.printer + "打印机异常",
+          msg: `${defaultPrinter || data.printer || "指定"}打印机不存在`,
           templateId: data.templateId,
           replyId: data.replyId,
         });
@@ -131,6 +171,9 @@ function initPrintEvent() {
       }
       MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
       return;
+    }
+    if (typeof currentPrinter.status !== "undefined") {
+      console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
     }
     let deviceName = defaultPrinter;
 
@@ -422,43 +465,19 @@ function initPrintEvent() {
       socket = SOCKET_CLIENT;
     }
     const printers = await PRINT_WINDOW.webContents.getPrintersAsync();
-    let havePrinter = false;
-    let defaultPrinter = data.printer || store.get("defaultPrinter", "");
-    let printerError = false;
-    printers.forEach((element) => {
-      // 获取默认打印机
-      if (
-        element.isDefault &&
-        (defaultPrinter == "" || defaultPrinter == void 0)
-      ) {
-        defaultPrinter = element.name;
-      }
-      // 判断打印机是否存在
-      if (element.name === defaultPrinter) {
-        // todo: 打印机状态对照表
-        // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
-        // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
-        if (process.platform === "win32") {
-          if (element.status != 0) {
-            printerError = true;
-          }
-        } else {
-          if (element.status != 3) {
-            printerError = true;
-          }
-        }
-        havePrinter = true;
-      }
-    });
-    if (printerError) {
-      const { StatusMsg } = getCurrentPrintStatusByName(defaultPrinter);
+    const {
+      printerName: defaultPrinter,
+      printerInfo: currentPrinter,
+      exists: havePrinter,
+    } = resolveTargetPrinter(printers, data.printer || store.get("defaultPrinter", ""));
+    if (!havePrinter) {
       console.log(
         `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${data.templateId
-        }】 打印失败，打印机异常，打印机：${defaultPrinter}, 打印机状态：${StatusMsg}`,
+        }】 打印失败，打印机不存在，打印机：${defaultPrinter || data.printer || "未指定"}`,
       );
       socket &&
         socket.emit("error", {
-          msg: data.printer + "打印机异常",
+          msg: `${defaultPrinter || data.printer || "指定"}打印机不存在`,
           templateId: data.templateId,
           replyId: data.replyId,
         });
@@ -469,6 +488,9 @@ function initPrintEvent() {
       }
       MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
       return;
+    }
+    if (typeof currentPrinter.status !== "undefined") {
+      console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
     }
     let deviceName = defaultPrinter;
 
@@ -578,43 +600,19 @@ function initPrintEvent() {
       socket = SOCKET_CLIENT;
     }
     const printers = await PRINT_WINDOW.webContents.getPrintersAsync();
-    let havePrinter = false;
-    let defaultPrinter = data.printer || store.get("defaultPrinter", "");
-    let printerError = false;
-    printers.forEach((element) => {
-      // 获取默认打印机
-      if (
-        element.isDefault &&
-        (defaultPrinter == "" || defaultPrinter == void 0)
-      ) {
-        defaultPrinter = element.name;
-      }
-      // 判断打印机是否存在
-      if (element.name === defaultPrinter) {
-        // todo: 打印机状态对照表
-        // win32: https://learn.microsoft.com/en-us/windows/win32/printdocs/printer-info-2
-        // cups: https://www.cups.org/doc/cupspm.html#ipp_status_e
-        if (process.platform === "win32") {
-          if (element.status != 0) {
-            printerError = true;
-          }
-        } else {
-          if (element.status != 3) {
-            printerError = true;
-          }
-        }
-        havePrinter = true;
-      }
-    });
-    if (printerError) {
-      const { StatusMsg } = getCurrentPrintStatusByName(defaultPrinter);
+    const {
+      printerName: defaultPrinter,
+      printerInfo: currentPrinter,
+      exists: havePrinter,
+    } = resolveTargetPrinter(printers, data.printer || store.get("defaultPrinter", ""));
+    if (!havePrinter) {
       console.log(
         `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${data.templateId
-        }】 打印失败，打印机异常，打印机：${defaultPrinter}, 打印机状态：${StatusMsg}`,
+        }】 打印失败，打印机不存在，打印机：${defaultPrinter || data.printer || "未指定"}`,
       );
       socket &&
         socket.emit("error", {
-          msg: data.printer + "打印机异常",
+          msg: `${defaultPrinter || data.printer || "指定"}打印机不存在`,
           templateId: data.templateId,
           replyId: data.replyId,
         });
@@ -625,6 +623,9 @@ function initPrintEvent() {
       }
       MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
       return;
+    }
+    if (typeof currentPrinter.status !== "undefined") {
+      console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
     }
     let deviceName = defaultPrinter;
 
@@ -792,42 +793,27 @@ function initPrintEvent() {
     };
 
     const printers = await PRINT_WINDOW.webContents.getPrintersAsync();
-    let defaultPrinter = data.printer || store.get("defaultPrinter", "");
-    let printerError = false;
-    printers.forEach((element) => {
-      if (
-        element.isDefault &&
-        (defaultPrinter == "" || defaultPrinter == void 0)
-      ) {
-        defaultPrinter = element.name;
-      }
-      if (element.name === defaultPrinter) {
-        if (process.platform === "win32") {
-          if (element.status != 0) {
-            printerError = true;
-          }
-        } else {
-          if (element.status != 3) {
-            printerError = true;
-          }
-        }
-      }
-    });
-
-    if (printerError) {
-      const { StatusMsg } = getCurrentPrintStatusByName(defaultPrinter);
+    const {
+      printerName: defaultPrinter,
+      printerInfo: currentPrinter,
+      exists: havePrinter,
+    } = resolveTargetPrinter(printers, data.printer || store.get("defaultPrinter", ""));
+    if (!havePrinter) {
       console.log(
         `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
-        }】 打印失败，打印机异常，打印机：${defaultPrinter}, 打印机状态：${StatusMsg}`,
+        }】 打印失败，打印机不存在，打印机：${defaultPrinter || data.printer || "未指定"}`,
       );
       socket &&
         socket.emit("error", {
-          msg: data.printer + "打印机异常",
+          msg: `${defaultPrinter || data.printer || "指定"}打印机不存在`,
           templateId: data.templateId,
           replyId: data.replyId,
         });
       onFinally();
       return;
+    }
+    if (typeof currentPrinter.status !== "undefined") {
+      console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
     }
 
     try {
@@ -871,27 +857,35 @@ function initPrintEvent() {
       const tempHtmlDir = store.get("pdfPath") || os.tmpdir();
       fs.mkdirSync(tempHtmlDir, { recursive: true });
 
-      const htmlFiles = svgPages.map((svgPage, index) => {
-        const fileName = `temp-${index + 1}.html`;
-        const tempHtmlPath = path.join(tempHtmlDir, fileName);
-        fs.writeFileSync(
-          tempHtmlPath,
-          `<!DOCTYPE html>
+      const tempHtmlPath = path.join(
+        tempHtmlDir,
+        "temp-svg-print.html",
+      );
+      const requestUnit = normalizePrintUnit(data.unit || "mm");
+      const requestWidth = Number(data.width) || 0;
+      const requestHeight = Number(data.height) || 0;
+      const hasRequestedSize = requestWidth > 0 && requestHeight > 0;
+      const dynamicStyle = hasRequestedSize
+        ? `
+@page { size: ${requestWidth}${requestUnit} ${requestHeight}${requestUnit}; margin: 0; }
+.svg-page { width: ${requestWidth}${requestUnit}; height: ${requestHeight}${requestUnit}; overflow: hidden; }
+.svg-page svg { width: 100%; height: 100%; }
+`
+        : "";
+      const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>${data.title ? data.title : "SVG批量打印"}-${index + 1}</title>
-  <style>${styleContent}</style>
+  <title>${data.title ? data.title : "SVG批量打印"}</title>
+  <style>${styleContent}
+${dynamicStyle}</style>
 </head>
 <body>
-  <div id="printElement">${svgPage}</div>
+  <div id="printElement">${svgPages.join("")}</div>
 </body>
-</html>`,
-          "utf8",
-        );
-        console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
-        return tempHtmlPath;
-      });
+</html>`;
+      fs.writeFileSync(tempHtmlPath, htmlContent, "utf8");
+      console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
 
       const pageRanges =
         typeof data.pageRanges === "string" ? data.pageRanges : undefined;
@@ -911,12 +905,16 @@ function initPrintEvent() {
         pageRanges,
         duplexMode: data.duplexMode,
         dpi: data.dpi ?? 300,
-        header: data.header,
-        footer: data.footer,
         pageSize: data.pageSize,
       };
+      if (hasRequestedSize) {
+        printOptions.pageSize = {
+          width: convertUnitToMicrons(requestWidth, requestUnit),
+          height: convertUnitToMicrons(requestHeight, requestUnit),
+        };
+      }
 
-      const printSingleHtml = (tempHtmlPath, pageIndex, totalPages) => new Promise((resolve, reject) => {
+      const printBatchHtml = (batchHtmlPath, totalPages) => new Promise((resolve, reject) => {
         const tempPrintWindow = new BrowserWindow({
           width: 100,
           height: 100,
@@ -943,28 +941,124 @@ function initPrintEvent() {
         };
 
         tempPrintWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription) => {
-          done(new Error(`第${pageIndex + 1}/${totalPages}页临时HTML加载失败(${errorCode}): ${errorDescription}`));
+          done(new Error(`SVG批量临时HTML加载失败(${errorCode}): ${errorDescription}`));
         });
 
         tempPrintWindow
-          .loadURL(pathToFileURL(tempHtmlPath).href)
+          .loadURL(pathToFileURL(batchHtmlPath).href)
           .then(() => {
-            tempPrintWindow.webContents.print(printOptions, (success, failureReason) => {
-              if (!success) {
-                done(new Error(`第${pageIndex + 1}/${totalPages}页打印失败: ${failureReason || "未知错误"}`));
-                return;
-              }
-              done();
-            });
+            setTimeout(() => {
+              tempPrintWindow.webContents
+                .executeJavaScript(`new Promise((resolve) => {
+                  requestAnimationFrame(() => requestAnimationFrame(resolve));
+                })`)
+                .then(() =>
+                  tempPrintWindow.webContents.executeJavaScript(`(() => {
+                    const pages = Array.from(document.querySelectorAll(".svg-page"));
+                    if (!pages.length) {
+                      return { hasSvg: false, width: 0, height: 0 };
+                    }
+                    const reqWidth = ${JSON.stringify(requestWidth)};
+                    const reqHeight = ${JSON.stringify(requestHeight)};
+                    const reqUnit = ${JSON.stringify(requestUnit)};
+                    const hasRequestedSize = reqWidth > 0 && reqHeight > 0;
+                    let maxWidth = 0;
+                    let totalHeight = 0;
+                    let hasSvg = false;
+                    pages.forEach((page) => {
+                      const svg = page.querySelector("svg");
+                      if (!svg) return;
+                      hasSvg = true;
+                      const viewBox = svg.viewBox && svg.viewBox.baseVal
+                        ? svg.viewBox.baseVal
+                        : null;
+                      const rect = svg.getBoundingClientRect();
+                      let width = rect.width;
+                      let height = rect.height;
+                      if (!(width > 0 && height > 0) && viewBox && viewBox.width > 0 && viewBox.height > 0) {
+                        width = viewBox.width;
+                        height = viewBox.height;
+                      }
+                      if (hasRequestedSize) {
+                        page.style.width = reqWidth + reqUnit;
+                        page.style.height = reqHeight + reqUnit;
+                        svg.style.width = "100%";
+                        svg.style.height = "100%";
+                      }
+                      if (width > 0 && height > 0) {
+                        if (!hasRequestedSize) {
+                          svg.style.width = width + "px";
+                          svg.style.height = height + "px";
+                          page.style.width = width + "px";
+                          page.style.height = height + "px";
+                        }
+                        maxWidth = Math.max(maxWidth, width);
+                        totalHeight += height;
+                      }
+                    });
+                    const printElement = document.querySelector("#printElement");
+                    if (printElement && maxWidth > 0 && totalHeight > 0) {
+                      printElement.style.width = maxWidth + "px";
+                      printElement.style.height = totalHeight + "px";
+                    }
+                    if (hasRequestedSize) {
+                      return { hasSvg, width: reqWidth, height: reqHeight, unit: reqUnit };
+                    }
+                    return { hasSvg, width: maxWidth, height: totalHeight, unit: "px" };
+                  })()`),
+                )
+                .then((svgInfo) => {
+                  if (!svgInfo?.hasSvg) {
+                    done(
+                      new Error(
+                        `SVG批量打印不存在可打印SVG节点`,
+                      ),
+                    );
+                    return;
+                  }
+                  if (!(svgInfo.width > 0 && svgInfo.height > 0)) {
+                    done(
+                      new Error(
+                        `SVG批量打印尺寸异常(${svgInfo.width}x${svgInfo.height})`,
+                      ),
+                    );
+                    return;
+                  }
+                  if (hasRequestedSize) {
+                    tempPrintWindow.setContentSize(
+                      convertUnitToPx(svgInfo.width, svgInfo.unit),
+                      convertUnitToPx(svgInfo.height, svgInfo.unit),
+                    );
+                  } else {
+                    tempPrintWindow.setContentSize(
+                      Math.ceil(svgInfo.width),
+                      Math.ceil(svgInfo.height),
+                    );
+                  }
+                  tempPrintWindow.webContents.print(printOptions, (success, failureReason) => {
+                    if (!success) {
+                      done(new Error(`SVG批量打印失败: ${failureReason || "未知错误"}`));
+                      return;
+                    }
+                    // 部分驱动在回调后立即销毁窗口会出现空白页，这里给极短缓冲
+                    setTimeout(() => done(), 180);
+                  });
+                })
+                .catch((err) => {
+                  done(
+                    new Error(
+                      `SVG批量渲染失败: ${err.message}`,
+                    ),
+                  );
+                });
+            }, data.svgRenderDelayMs ?? 120);
           })
           .catch((err) => {
-            done(new Error(`第${pageIndex + 1}/${totalPages}页加载异常: ${err.message}`));
+            done(new Error(`SVG批量加载异常: ${err.message}`));
           });
       });
 
-      for (let i = 0; i < htmlFiles.length; i++) {
-        await printSingleHtml(htmlFiles[i], i, htmlFiles.length);
-      }
+      await printBatchHtml(tempHtmlPath, svgPages.length);
 
       onSuccess();
     } catch (error) {

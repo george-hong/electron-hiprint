@@ -216,8 +216,8 @@ async function createWindow() {
   systemSetup();
 
   // 加载主页面
-  const indexHtml = path.join("file://", app.getAppPath(), "assets/index.html");
-  MAIN_WINDOW.webContents.loadURL(indexHtml);
+  const indexHtml = path.join(app.getAppPath(), "assets/index.html");
+  MAIN_WINDOW.webContents.loadFile(indexHtml);
 
   // 退出
   MAIN_WINDOW.on("closed", () => {
@@ -305,12 +305,8 @@ function loadingView(windowOptions) {
     height: windowOptions.height,
   });
 
-  const loadingHtml = path.join(
-    "file://",
-    app.getAppPath(),
-    "assets/loading.html",
-  );
-  loadingBrowserView.webContents.loadURL(loadingHtml);
+  const loadingHtml = path.join(app.getAppPath(), "assets/loading.html");
+  loadingBrowserView.webContents.loadFile(loadingHtml);
 
   // 主窗口 dom 加载完毕，移除 loadingBrowserView
   MAIN_WINDOW.webContents.on("dom-ready", async (event) => {

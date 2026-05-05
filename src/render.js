@@ -84,8 +84,8 @@ async function createRenderWindow() {
   RENDER_WINDOW = new BrowserWindow(windowOptions);
 
   // 加载打印渲染进程页面
-  let printHtml = path.join("file://", app.getAppPath(), "/assets/render.html");
-  RENDER_WINDOW.webContents.loadURL(printHtml);
+  let printHtml = path.join(app.getAppPath(), "assets/render.html");
+  RENDER_WINDOW.webContents.loadFile(printHtml);
 
   RENDER_WINDOW.on("ready-to-show", () => {
     const windowBounds = RENDER_WINDOW.getBounds();

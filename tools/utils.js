@@ -4,9 +4,23 @@ const address = require("address");
 const ipp = require("ipp");
 const { machineIdSync } = require("node-machine-id");
 const Store = require("electron-store");
-const { getPaperSizeInfo, getPaperSizeInfoAll } = require("win32-pdf-printer");
 const { v7: uuidv7 } = require("uuid");
 const fs = require("fs");
+let getPaperSizeInfo = () => [];
+let getPaperSizeInfoAll = () => [];
+let win32PdfPrinterAvailable = false;
+if (process.platform === "win32") {
+  try {
+    const win32PdfPrinter = require("win32-pdf-printer");
+    getPaperSizeInfo = win32PdfPrinter.getPaperSizeInfo || getPaperSizeInfo;
+    getPaperSizeInfoAll = win32PdfPrinter.getPaperSizeInfoAll || getPaperSizeInfoAll;
+    win32PdfPrinterAvailable = true;
+  } catch (error) {
+    console.warn(
+      `[win32-pdf-printer] failed to load, fallback to limited status: ${error.message}`,
+    );
+  }
+}
 let buildInfo = {};
 const buildInfoPath = require("path").join(__dirname, "../build-info.json");
 if (fs.existsSync(buildInfoPath)) {
@@ -364,10 +378,17 @@ function initServeEvent(server) {
      */
     socket.on("getPaperSizeInfo", (printer) => {
       console.log(`插件端 ${socket.id}: getPaperSizeInfo`);
-      if (process.platform === "win32") {
+      if (process.platform === "win32" && win32PdfPrinterAvailable) {
         let fun = printer ? getPaperSizeInfo : getPaperSizeInfoAll;
-        let paper = fun();
+        let paper = [];
+        try {
+          paper = fun();
+        } catch (error) {
+          console.error(`getPaperSizeInfo failed: ${error.message}`);
+        }
         paper && socket.emit("paperSizeInfo", paper);
+      } else if (process.platform === "win32") {
+        socket.emit("paperSizeInfo", []);
       }
     });
 
@@ -871,13 +892,22 @@ function initClientEvent() {
  */
 
 function getCurrentPrintStatusByName(printerName) {
-  if (process.platform === "win32") {
-    const { StatusMsg } = getPaperSizeInfoAll().find(
+  if (process.platform === "win32" && win32PdfPrinterAvailable) {
+    let printerStatusList = [];
+    try {
+      printerStatusList = getPaperSizeInfoAll();
+    } catch (error) {
+      console.error(`getPaperSizeInfoAll failed: ${error.message}`);
+    }
+    const { StatusMsg } = printerStatusList.find(
       (item) => item.PrinterName === printerName,
     ) || { StatusMsg: "未找到打印机" };
     return {
       StatusMsg,
     };
+  }
+  if (process.platform === "win32") {
+    return { StatusMsg: "打印机状态获取不可用（win32-pdf-printer 未加载）" };
   }
   return { StatusMsg: "非Windows系统, 暂不支持" };
 }

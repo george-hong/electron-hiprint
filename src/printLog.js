@@ -35,12 +35,8 @@ function createPrintLogWindow() {
   loadingView(windowOptions);
 
   // 加载打印日志页面
-  const printLogHtml = path.join(
-    "file://",
-    app.getAppPath(),
-    "/assets/printLog.html",
-  );
-  PRINT_LOG_WINDOW.loadURL(printLogHtml);
+  const printLogHtml = path.join(app.getAppPath(), "assets/printLog.html");
+  PRINT_LOG_WINDOW.loadFile(printLogHtml);
 
   // 未打包时打开开发者工具
   if (!app.isPackaged) {
@@ -71,12 +67,8 @@ function loadingView(windowOptions) {
     height: windowOptions.height,
   });
 
-  const loadingHtml = path.join(
-    "file://",
-    app.getAppPath(),
-    "assets/loading.html",
-  );
-  loadingBrowserView.webContents.loadURL(loadingHtml);
+  const loadingHtml = path.join(app.getAppPath(), "assets/loading.html");
+  loadingBrowserView.webContents.loadFile(loadingHtml);
 
   // 打印日志窗口 dom 加载完毕，移除 loadingBrowserView
   PRINT_LOG_WINDOW.webContents.on("dom-ready", async (event) => {
