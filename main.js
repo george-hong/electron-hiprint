@@ -10,6 +10,7 @@ const {
   BrowserView,
   ipcMain,
   Notification,
+  dialog,
   Tray,
   Menu,
   shell,
@@ -172,7 +173,7 @@ async function initialize() {
         createWindow();
       }
     });
-    console.log("==> Electron-hiprint 启动 <==");
+    console.log("==> 玖零打印组件 启动 <==");
   });
 }
 
@@ -184,7 +185,7 @@ async function createWindow() {
   const windowOptions = {
     width: 500, // 窗口宽度
     height: 300, // 窗口高度
-    title: store.get("mainTitle") || "Electron-hiprint",
+    title: store.get("mainTitle") || "玖零打印组件",
     useContentSize: true, // 窗口大小不包含边框
     center: true, // 居中
     resizable: false, // 禁止窗口缩放
@@ -265,7 +266,7 @@ async function createWindow() {
         global.SOCKET_CLIENT = ioClient(store.get("transitUrl"), {
           transports: ["websocket"],
           query: {
-            client: "electron-hiprint",
+            client: "玖零打印组件",
           },
           auth: {
             token: store.get("transitToken"),
@@ -345,6 +346,55 @@ function showMainWindow() {
 }
 
 /**
+ * @description: 清理应用缓存（配置缓存 + 会话缓存）
+ * @return {Promise<void>}
+ */
+async function clearAppCache() {
+  const confirm = await dialog.showMessageBox({
+    type: "warning",
+    title: "清理缓存",
+    message: "确认清理缓存吗？",
+    detail: "将清空本地配置缓存，并清理浏览器会话缓存。",
+    buttons: ["取消", "确认清理"],
+    defaultId: 1,
+    cancelId: 0,
+    noLink: true,
+  });
+
+  if (confirm.response !== 1) {
+    return;
+  }
+
+  try {
+    store.clear();
+    if (MAIN_WINDOW && MAIN_WINDOW.webContents && MAIN_WINDOW.webContents.session) {
+      await MAIN_WINDOW.webContents.session.clearCache();
+      await MAIN_WINDOW.webContents.session.clearStorageData();
+    }
+    await dialog.showMessageBox({
+      type: "info",
+      title: "清理缓存",
+      message: "缓存已清理完成",
+      detail: "应用将自动重启以应用最新状态。",
+      buttons: ["确定"],
+      noLink: true,
+    });
+    app.relaunch();
+    app.exit(0);
+  } catch (error) {
+    console.error("==>TRAY 清理缓存失败<==", error);
+    dialog.showMessageBox({
+      type: "error",
+      title: "清理缓存失败",
+      message: "清理缓存时发生错误",
+      detail: error?.message || String(error),
+      buttons: ["确定"],
+      noLink: true,
+    });
+  }
+}
+
+/**
  * @description: 初始化托盘
  * @return {Tray} APP_TRAY 托盘实例
  */
@@ -354,7 +404,7 @@ function initTray() {
   APP_TRAY = new Tray(trayPath);
 
   // 托盘提示标题
-  APP_TRAY.setToolTip("hiprint");
+  APP_TRAY.setToolTip("玖零打印组件");
 
   // 托盘菜单
   const trayMenuTemplate = [
@@ -388,6 +438,13 @@ function initTray() {
         } else {
           PRINT_LOG_WINDOW.show();
         }
+      },
+    },
+    {
+      label: "清理缓存",
+      click: async () => {
+        console.log("==>TRAY 清理缓存<==");
+        await clearAppCache();
       },
     },
     {

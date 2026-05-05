@@ -8,7 +8,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Electron-hiprint</title>
+    <title>玖零打印组件</title>
     <link rel="stylesheet" href="./css/style.css" />
     <link rel="stylesheet" href="../node_modules/element-ui/lib/theme-chalk/index.css" />
     <script src="../node_modules/vue/dist/vue.min.js"></script>
@@ -49,9 +49,9 @@
           </div>
         </div>
         <div class="status">
-          <div class="message">
+          <!-- <div class="message">
             中转状态: <span>{{ transitActiveFlag ? '已' : '未' }}连接</span>
-          </div>
+          </div> -->
           <div class="message">
             本地连接：
             <span>
@@ -80,7 +80,7 @@
 
       const { version } = require("../package.json");
 
-      document.title = store.get("mainTitle") || "Electron-hiprint";
+      document.title = store.get("mainTitle") || "玖零打印组件";
 
       let ipc = ipcRenderer;
       new Vue({

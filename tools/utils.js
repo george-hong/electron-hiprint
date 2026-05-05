@@ -32,7 +32,7 @@ Store.initRenderer();
 const schema = {
   mainTitle: {
     type: "string",
-    default: "Electron-hiprint",
+    default: "玖零打印组件",
   },
   nickName: {
     type: "string",
@@ -921,13 +921,14 @@ Chromium: ${process.versions.chrome}
 Node.js: ${process.versions.node}
 V8: ${process.versions.v8}
 OS: ${os.type()} ${os.arch()} ${os.release()}`.trim();
-  const title = store.get("mainTitle") || "Electron-hiprint";
+  const title = store.get("mainTitle") || "玖零打印组件";
   dialog
     .showMessageBox({
       title: `关于 ${title}`,
       message: title,
       type: "info",
-      buttons: ["反馈", "复制", "确定"],
+      // buttons: ["反馈", "复制", "确定"],
+      buttons: ["复制", "确定"],
       noLink: true,
       defaultId: 0,
       detail,
@@ -936,23 +937,6 @@ OS: ${os.type()} ${os.arch()} ${os.release()}`.trim();
     })
     .then((result) => {
       if (result.response === 0) {
-        const issuesUrl = new URL(
-          `https://github.com/CcSimple/electron-hiprint/issues/new`,
-        );
-        issuesUrl.searchParams.set(
-          "title",
-          `[反馈][${app.getVersion()}] 在此处完善反馈标题`,
-        );
-        const issuesBody = `## 问题描述
-请在此处详细描述你遇到的问题
-
-## 版本信息
-  
-${detail}`;
-        issuesUrl.searchParams.set("body", issuesBody);
-        shell.openExternal(issuesUrl.href);
-      }
-      if (result.response === 1) {
         clipboard.writeText(detail);
       }
     });

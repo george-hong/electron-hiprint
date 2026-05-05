@@ -1,9 +1,9 @@
 {
   "name": "electron-hiprint",
-  "version": "1.0.14-beta5",
+  "version": "1.1.0",
   "description": "vue-plugin-hiprint client",
   "main": "main.js",
-  "author": "CcSimple<840054486@qq.com>",
+  "author": "george",
   "license": "MIT",
   "homepage": "https://gitee.com/CcSimnpmple",
   "scripts": {
@@ -25,9 +25,9 @@
   },
   "build": {
     "npmRebuild": false,
-    "productName": "hiprint",
+    "productName": "玖零打印组件",
     "appId": "com.simple.cc.hiprint",
-    "copyright": "CcSimple<840054486@qq.com>",
+    "copyright": "george",
     "directories": {
       "output": "out"
     },
@@ -50,7 +50,7 @@
       "installerHeaderIcon": "./build/icons/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Hiprint",
+      "shortcutName": "玖零打印组件",
       "include": "installer.nsh"
     },
     "mac": {
