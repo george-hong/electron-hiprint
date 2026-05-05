@@ -99,6 +99,38 @@ function convertUnitToMicrons(value, unit) {
   }
 }
 
+function getPrinterOfflineReason(printer) {
+  if (!printer || typeof printer.status !== "number") {
+    return "";
+  }
+  const status = Number(printer.status);
+  if (process.platform === "win32") {
+    const PRINTER_STATUS_OFFLINE = 0x80;
+    const PRINTER_STATUS_NOT_AVAILABLE = 0x1000;
+    if (status & PRINTER_STATUS_OFFLINE) {
+      return `status=${status}(OFFLINE)`;
+    }
+    if (status & PRINTER_STATUS_NOT_AVAILABLE) {
+      return `status=${status}(NOT_AVAILABLE)`;
+    }
+    return "";
+  }
+  // CUPS: 3-idle, 4-processing, 5-stopped
+  if (status === 5) {
+    return `status=${status}(STOPPED)`;
+  }
+  return "";
+}
+
+function normalizePrintFailureReason(failureReason) {
+  const reason = `${failureReason || ""}`.trim();
+  if (!reason) return "未知错误";
+  if (/print job canceled/i.test(reason)) {
+    return "打印机不在线";
+  }
+  return reason;
+}
+
 /**
  * @description: 创建打印窗口
  * @return {BrowserWindow} PRINT_WINDOW 打印窗口
@@ -174,6 +206,25 @@ function initPrintEvent() {
     }
     if (typeof currentPrinter.status !== "undefined") {
       console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
+    }
+    const offlineReason = getPrinterOfflineReason(currentPrinter);
+    if (offlineReason) {
+      console.log(
+        `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
+        }】 打印失败，打印机离线，打印机：${defaultPrinter}，${offlineReason}`,
+      );
+      socket &&
+        socket.emit("error", {
+          msg: "打印机不在线",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      if (data.taskId) {
+        PRINT_RUNNER_DONE[data.taskId]();
+        delete PRINT_RUNNER_DONE[data.taskId];
+      }
+      MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+      return;
     }
     let deviceName = defaultPrinter;
 
@@ -414,6 +465,7 @@ function initPrintEvent() {
         pageSize: data.pageSize, // 打印纸张
       },
       (success, failureReason) => {
+        const normalizedFailureReason = normalizePrintFailureReason(failureReason);
         if (success) {
           console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
@@ -424,9 +476,9 @@ function initPrintEvent() {
         } else {
           console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
-            }】 打印失败，打印类型 HTML，打印机：${deviceName}，原因：${failureReason}`,
+            }】 打印失败，打印类型 HTML，打印机：${deviceName}，原因：${normalizedFailureReason}`,
           );
-          logPrintResult("failed", failureReason);
+          logPrintResult("failed", normalizedFailureReason);
         }
         if (socket) {
           if (success) {
@@ -439,7 +491,7 @@ function initPrintEvent() {
             socket.emit("success", result);
           } else {
             socket.emit("error", {
-              msg: failureReason,
+              msg: normalizedFailureReason,
               templateId: data.templateId,
               replyId: data.replyId,
             });
@@ -491,6 +543,25 @@ function initPrintEvent() {
     }
     if (typeof currentPrinter.status !== "undefined") {
       console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
+    }
+    const offlineReason = getPrinterOfflineReason(currentPrinter);
+    if (offlineReason) {
+      console.log(
+        `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
+        }】 打印失败，打印机离线，打印机：${defaultPrinter}，${offlineReason}`,
+      );
+      socket &&
+        socket.emit("error", {
+          msg: "打印机不在线",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      if (data.taskId) {
+        PRINT_RUNNER_DONE[data.taskId]();
+        delete PRINT_RUNNER_DONE[data.taskId];
+      }
+      MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+      return;
     }
     let deviceName = defaultPrinter;
 
@@ -573,9 +644,10 @@ function initPrintEvent() {
     }
 
     const onFail = (err) => {
+      const normalizedFailureReason = normalizePrintFailureReason(err?.message);
       socket &&
         socket.emit("error", {
-          msg: "打印失败: " + err.message,
+          msg: normalizedFailureReason,
           templateId: data.templateId,
           replyId: data.replyId,
         });
@@ -626,6 +698,25 @@ function initPrintEvent() {
     }
     if (typeof currentPrinter.status !== "undefined") {
       console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
+    }
+    const offlineReason = getPrinterOfflineReason(currentPrinter);
+    if (offlineReason) {
+      console.log(
+        `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
+        }】 打印失败，打印机离线，打印机：${defaultPrinter}，${offlineReason}`,
+      );
+      socket &&
+        socket.emit("error", {
+          msg: "打印机不在线",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      if (data.taskId) {
+        PRINT_RUNNER_DONE[data.taskId]();
+        delete PRINT_RUNNER_DONE[data.taskId];
+      }
+      MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+      return;
     }
     let deviceName = defaultPrinter;
 
@@ -729,9 +820,10 @@ function initPrintEvent() {
     }
 
     const onFail = (err) => {
+      const normalizedFailureReason = normalizePrintFailureReason(err?.message);
       socket &&
         socket.emit("error", {
-          msg: "打印失败: " + err.message,
+          msg: normalizedFailureReason,
           templateId: data.templateId,
           replyId: data.replyId,
         });
@@ -814,6 +906,21 @@ function initPrintEvent() {
     }
     if (typeof currentPrinter.status !== "undefined") {
       console.log(`打印机状态(${defaultPrinter}): ${currentPrinter.status}`);
+    }
+    const offlineReason = getPrinterOfflineReason(currentPrinter);
+    if (offlineReason) {
+      console.log(
+        `${data.replyId ? "中转服务" : "插件端"} ${socket?.id} 模板 【${data.templateId
+        }】 打印失败，打印机离线，打印机：${defaultPrinter}，${offlineReason}`,
+      );
+      socket &&
+        socket.emit("error", {
+          msg: "打印机不在线",
+          templateId: data.templateId,
+          replyId: data.replyId,
+        });
+      onFinally();
+      return;
     }
 
     try {
@@ -1037,7 +1144,11 @@ ${dynamicStyle}</style>
                   }
                   tempPrintWindow.webContents.print(printOptions, (success, failureReason) => {
                     if (!success) {
-                      done(new Error(`SVG批量打印失败: ${failureReason || "未知错误"}`));
+                      done(
+                        new Error(
+                          `SVG批量打印失败: ${normalizePrintFailureReason(failureReason)}`,
+                        ),
+                      );
                       return;
                     }
                     // 部分驱动在回调后立即销毁窗口会出现空白页，这里给极短缓冲

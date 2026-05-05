@@ -9,6 +9,15 @@ const dayjs = require("dayjs");
 const { store } = require("../tools/utils");
 const db = require("../tools/database");
 
+function normalizePrintFailureReason(failureReason) {
+  const reason = `${failureReason || ""}`.trim();
+  if (!reason) return "未知错误";
+  if (/print job canceled/i.test(reason)) {
+    return "打印机不在线";
+  }
+  return reason;
+}
+
 // 这是 1920 * 1080 屏幕常规工作区域尺寸
 let windowWorkArea = {
   width: 1920,
@@ -410,6 +419,7 @@ async function printFun(event, data) {
       pageSize: data.pageSize, // 打印纸张
     },
     (success, failureReason) => {
+      const normalizedFailureReason = normalizePrintFailureReason(failureReason);
       if (socket) {
         if (success) {
           console.log(
@@ -430,11 +440,11 @@ async function printFun(event, data) {
           console.log(
             `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
               data.templateId
-            }】 打印失败，打印类型 JSON，打印机：${deviceName}，原因：${failureReason}`,
+            }】 打印失败，打印类型 JSON，打印机：${deviceName}，原因：${normalizedFailureReason}`,
           );
-          logPrintResult("failed", failureReason);
+          logPrintResult("failed", normalizedFailureReason);
           socket.emit("render-print-error", {
-            msg: failureReason,
+            msg: normalizedFailureReason,
             templateId: data.templateId,
             replyId: data.replyId,
           });
