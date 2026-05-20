@@ -233,7 +233,7 @@ function generateWatchTask(getCheckTarget) {
       startWatch() {
         if (isWatching) return;
         this.createWatchTimeout();
-      },
+       },
       createWatchTimeout() {
         // 更新开关状态
         isWatching = true;

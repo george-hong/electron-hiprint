@@ -167,6 +167,229 @@ async function createPrintWindow() {
   return PRINT_WINDOW;
 }
 
+async function printHTMLByData(data, socket, logPrintResult, printer) {
+  const tempHtmlDir = store.get("pdfPath") || os.tmpdir();
+  fs.mkdirSync(tempHtmlDir, { recursive: true });
+  const svgBatchStylePath = path.join(
+    app.getAppPath(),
+    "assets",
+    "css",
+    "print-lock.css",
+  );
+  const styleContent = fs.readFileSync(svgBatchStylePath, "utf8");
+  const tempHtmlPath = path.join(tempHtmlDir, "batch-print.html");
+  const targetStr = '<link rel="icon" href="/favicon.ico">';
+  data.html = data.html.replace(
+    targetStr,
+    `${targetStr}<style>${styleContent}</style>`,
+  );
+  fs.writeFileSync(tempHtmlPath, data.html, "utf8");
+  console.log(`[printHTMLByData] 临时Html文件: ${tempHtmlPath}`);
+  const tempPrintWindow = new BrowserWindow({
+    width: 800,
+    height: 800,
+    show: false,
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: true,
+    },
+    backgroundColor: "#fff",
+  });
+
+  const pageRanges =
+    typeof data.pageRanges === "string" ? data.pageRanges : undefined;
+  const printOptions = {
+    silent: data.silent ?? true,
+    printBackground: data.printBackground ?? true,
+    deviceName: printer,
+    color: data.color ?? true,
+    margins: data.margins ?? {
+      marginType: "none",
+    },
+    landscape: false,
+    scaleFactor: data.scaleFactor ?? 100,
+    pagesPerSheet: data.pagesPerSheet ?? 1,
+    collate: data.collate ?? true,
+    copies: data.copies ?? 1,
+    pageRanges,
+    duplexMode: data.duplexMode,
+    dpi: data.dpi ?? 300,
+    pageSize: data.pageSize,
+  };
+
+  try {
+    await tempPrintWindow.loadURL(pathToFileURL(tempHtmlPath).href);
+
+    // 等待页面完成渲染
+    await tempPrintWindow.webContents.executeJavaScript(
+      `new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      })`,
+    );
+
+    // 获取内容实际尺寸，调整窗口大小和纸张大小，避免打印内容过小
+    const contentSize = await tempPrintWindow.webContents.executeJavaScript(
+      `(() => {
+        const papers = document.querySelectorAll('.hiprint-printPaper');
+        if (!papers.length) {
+          return { width: 0, height: 0, pageHeight: 0 };
+        }
+        let maxWidth = 0;
+        let totalHeight = 0;
+        let firstHeight = 0;
+        papers.forEach(function(paper, i) {
+          var rect = paper.getBoundingClientRect();
+          maxWidth = Math.max(maxWidth, rect.width);
+          totalHeight += rect.height;
+          if (i === 0) {
+            firstHeight = rect.height;
+          }
+        });
+        return {
+          width: Math.ceil(maxWidth),
+          height: Math.ceil(totalHeight),
+          pageHeight: Math.ceil(firstHeight),
+        };
+      })()`,
+    );
+
+    if (contentSize.width > 0 && contentSize.pageHeight > 0) {
+      // 窗口只设为单页尺寸，避免多页叠加导致窗口过窄过高而触发打印旋转
+      tempPrintWindow.setContentSize(contentSize.width, contentSize.pageHeight);
+
+      // 再等一帧确保 resize 后布局稳定
+      await tempPrintWindow.webContents.executeJavaScript(
+        `new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })`,
+      );
+
+      // 设置 pageSize 以匹配单页实际尺寸（单位：微米）
+      const pxToMicrons = (px) => Math.round((px / 96) * 25400);
+      const pageHeight = contentSize.pageHeight || contentSize.height;
+      printOptions.pageSize = {
+        width: pxToMicrons(contentSize.width),
+        height: pxToMicrons(pageHeight),
+      };
+    }
+  } catch (err) {
+    console.error(`HTML打印页面加载/渲染失败: ${err.message}`);
+    if (!tempPrintWindow.isDestroyed()) {
+      tempPrintWindow.destroy();
+    }
+    return;
+  }
+
+  return new Promise((resolve) => {
+    tempPrintWindow.webContents.print(
+      printOptions,
+      (success, failureReason) => {
+        if (!success) {
+          console.error(
+            `HTML打印失败: ${normalizePrintFailureReason(failureReason)}`,
+          );
+          resolve();
+          return;
+        }
+        if (data.taskId) {
+          PRINT_RUNNER_DONE[data.taskId]();
+          delete PRINT_RUNNER_DONE[data.taskId];
+        }
+        if (socket) {
+          const result = {
+            msg: "打印成功",
+            templateId: data.templateId,
+            replyId: data.replyId,
+          };
+          socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
+          socket.emit("success", result);
+        }
+        logPrintResult("success");
+        MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+        setTimeout(() => resolve(), 180);
+      },
+    );
+  }).finally(() => {
+    if (!tempPrintWindow.isDestroyed()) {
+      tempPrintWindow.destroy();
+    }
+  });
+}
+
+function oldPdfPrint(data, socket, deviceName, logPrintResult) {
+  const pdfPath = path.join(
+    store.get("pdfPath") || os.tmpdir(),
+    "hiprint",
+    dayjs().format(`YYYY_MM_DD HH_mm_ss_`) + `${uuidv7()}.pdf`,
+  );
+  fs.mkdirSync(path.dirname(pdfPath), {
+    recursive: true,
+  });
+  PRINT_WINDOW.webContents
+    .printToPDF({
+      landscape: data.landscape ?? false, // 横向打印
+      displayHeaderFooter: data.displayHeaderFooter ?? false, // 显示页眉页脚
+      printBackground: data.printBackground ?? true, // 打印背景色
+      scale: data.scale ?? 1, // 渲染比例 默认 1
+      pageSize: data.pageSize,
+      margins: data.margins ?? {
+        marginType: "none",
+      }, // 边距
+      pageRanges: data.pageRanges, // 打印页数范围
+      headerTemplate: data.headerTemplate, // 页头模板 (html)
+      footerTemplate: data.footerTemplate, // 页脚模板 (html)
+      preferCSSPageSize: data.preferCSSPageSize ?? false,
+    })
+    .then((pdfData) => {
+      fs.writeFileSync(pdfPath, pdfData);
+      printPdf(pdfPath, deviceName, data)
+        .then(() => {
+          console.log(
+            `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
+              data.templateId
+            }】 打印成功，打印类型：PDF，打印机：${deviceName}，页数：${
+              data.pageNum
+            }`,
+          );
+          if (socket) {
+            const result = {
+              msg: "打印成功",
+              templateId: data.templateId,
+              replyId: data.replyId,
+            };
+            socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
+            socket.emit("success", result);
+          }
+          logPrintResult("success");
+        })
+        .catch((err) => {
+          console.log(
+            `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${
+              data.templateId
+            }】 打印失败，打印类型：PDF，打印机：${deviceName}，原因：${
+              err.message
+            }`,
+          );
+          socket &&
+            socket.emit("error", {
+              msg: "打印失败: " + err.message,
+              templateId: data.templateId,
+              replyId: data.replyId,
+            });
+          logPrintResult("failed", err.message);
+        })
+        .finally(() => {
+          if (data.taskId) {
+            // 通过taskMap 调用 task done 回调
+            PRINT_RUNNER_DONE[data.taskId]();
+            // 删除 task
+            delete PRINT_RUNNER_DONE[data.taskId];
+          }
+          MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+        });
+    });
+}
+
 /**
  * @description: 绑定打印窗口事件
  * @return {Void}
@@ -253,74 +476,8 @@ function initPrintEvent() {
     // pdf 打印
     let isPdf = data.type && `${data.type}`.toLowerCase() === "pdf";
     if (isPdf) {
-      const pdfPath = path.join(
-        store.get("pdfPath") || os.tmpdir(),
-        "hiprint",
-        dayjs().format(`YYYY_MM_DD HH_mm_ss_`) + `${uuidv7()}.pdf`,
-      );
-      fs.mkdirSync(path.dirname(pdfPath), {
-        recursive: true,
-      });
-      PRINT_WINDOW.webContents
-        .printToPDF({
-          landscape: data.landscape ?? false, // 横向打印
-          displayHeaderFooter: data.displayHeaderFooter ?? false, // 显示页眉页脚
-          printBackground: data.printBackground ?? true, // 打印背景色
-          scale: data.scale ?? 1, // 渲染比例 默认 1
-          pageSize: data.pageSize,
-          margins: data.margins ?? {
-            marginType: "none",
-          }, // 边距
-          pageRanges: data.pageRanges, // 打印页数范围
-          headerTemplate: data.headerTemplate, // 页头模板 (html)
-          footerTemplate: data.footerTemplate, // 页脚模板 (html)
-          preferCSSPageSize: data.preferCSSPageSize ?? false,
-        })
-        .then((pdfData) => {
-          fs.writeFileSync(pdfPath, pdfData);
-          printPdf(pdfPath, deviceName, data)
-            .then(() => {
-              console.log(
-                `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${data.templateId
-                }】 打印成功，打印类型：PDF，打印机：${deviceName}，页数：${data.pageNum
-                }`,
-              );
-              if (socket) {
-                const result = {
-                  msg: "打印成功",
-                  templateId: data.templateId,
-                  replyId: data.replyId,
-                };
-                socket.emit("successs", result); // 兼容 vue-plugin-hiprint 0.0.56 之前包
-                socket.emit("success", result);
-              }
-              logPrintResult("success");
-            })
-            .catch((err) => {
-              console.log(
-                `${data.replyId ? "中转服务" : "插件端"} ${socket.id} 模板 【${data.templateId
-                }】 打印失败，打印类型：PDF，打印机：${deviceName}，原因：${err.message
-                }`,
-              );
-              socket &&
-                socket.emit("error", {
-                  msg: "打印失败: " + err.message,
-                  templateId: data.templateId,
-                  replyId: data.replyId,
-                });
-              logPrintResult("failed", err.message);
-            })
-            .finally(() => {
-              if (data.taskId) {
-                // 通过taskMap 调用 task done 回调
-                PRINT_RUNNER_DONE[data.taskId]();
-                // 删除 task
-                delete PRINT_RUNNER_DONE[data.taskId];
-              }
-              MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
-            });
-        });
-      return;
+      printHTMLByData(data, socket, logPrintResult, defaultPrinter)
+      return
     }
     // url_pdf 打印
     const isUrlPdf = data.type && `${data.type}`.toLowerCase() === "url_pdf";
