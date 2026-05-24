@@ -24,12 +24,12 @@
     "releases": "npm run compress && npm run build-all && npm run restore"
   },
   "build": {
-    "npmRebuild": false,
+    "npmRebuild": true,
     "productName": "玖零打印组件",
     "appId": "com.simple.cc.hiprint",
     "copyright": "george",
     "directories": {
-      "output": "out"
+      "output": "dist"
     },
     "asar": true,
     "files": [

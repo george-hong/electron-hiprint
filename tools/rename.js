@@ -6,7 +6,10 @@ const fs = require("fs");
 class ReName {
   constructor() {
     this.basePath = path.normalize(__dirname + "/..");
-    this.dirs = path.join(this.basePath, "/out/");
+    const pkgPath = path.join(this.basePath, "/package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath));
+    const outputDir = (pkg.build && pkg.build.directories && pkg.build.directories.output) || "out";
+    this.dirs = path.join(this.basePath, "/" + outputDir + "/");
   }
   /**
    * 格式化参数
