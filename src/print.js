@@ -1132,8 +1132,8 @@ function initPrintEvent() {
       const dynamicStyle = hasRequestedSize
         ? `
 @page { size: ${requestWidth}${requestUnit} ${requestHeight}${requestUnit}; margin: 0; }
-.svg-page { width: ${requestWidth}${requestUnit}; height: ${requestHeight}${requestUnit}; overflow: hidden; }
-.svg-page svg { width: 100%; height: 100%; }
+.svg-page { width: ${requestWidth}${requestUnit}; height: ${requestHeight}${requestUnit}; display: block; box-sizing: border-box; overflow: hidden; page-break-inside: avoid; break-inside: avoid-page; }
+.svg-page svg { display: block; width: 100%; height: 100%; }
 `
         : "";
       const htmlContent = `<!DOCTYPE html>

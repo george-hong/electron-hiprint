@@ -51,20 +51,28 @@ table {
 #printElement {
   margin: 0;
   padding: 0;
+  display: block;
 }
 
 .svg-page {
   width: auto;
   height: auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  page-break-inside: avoid;
+  break-inside: avoid-page;
 }
 
 @media print {
-  .svg-page:not(:first-child) {
-    page-break-before: always;
-    break-before: page;
+  .svg-page {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .svg-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
   }
 }
 
