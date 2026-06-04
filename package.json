@@ -10,8 +10,9 @@
     "start": "node start.js",
     "postinstall": "npm run fix-sqlite3",
     "fix-sqlite3": "node ./build/fixSqlite3bug.js",
-    "build-w": "electron-builder -w nsis:ia32 && node ./tools/rename --tag win_x32",
-    "build-w-64": "electron-builder -w nsis:x64 && node ./tools/rename --tag win_x64",
+    "build-w": "node ./tools/build-win --arch ia32 --tag win_x32",
+    "build-w-64": "node ./tools/build-win --arch x64 --tag win_x64",
+    "build-win": "npm run build-w && npm run build-w-64",
     "build-m": "electron-builder -m --x64 && node ./tools/rename --tag mac_x64",
     "build-m-arm64": "electron-builder -m --arm64 && node ./tools/rename --tag mac_arm64",
     "build-m-universal": "electron-builder -m --universal && node ./tools/rename --tag mac_universal",
@@ -24,7 +25,7 @@
     "releases": "npm run compress && npm run build-all && npm run restore"
   },
   "build": {
-    "npmRebuild": true,
+    "npmRebuild": false,
     "productName": "玖零打印组件",
     "appId": "com.simple.cc.hiprint",
     "copyright": "george",
@@ -112,14 +113,14 @@
     "pdf-to-printer": "^5.6.0",
     "socket.io": "^3.1.0",
     "socket.io-client": "^3.1.0",
-    "sqlite3": "^6.0.1",
+    "sqlite3": "5.1.7",
     "unix-print": "^1.2.0",
     "uuid": "^11.0.3",
     "vue": "^2.7.16",
     "win32-pdf-printer": "^4.0.1"
   },
   "devDependencies": {
-    "electron": "^41.5.0",
+    "electron": "17.4.11",
     "electron-builder": "^26.8.1",
     "fs-extra": "^9.1.0",
     "prettier": "^1.16.4",
