@@ -484,34 +484,83 @@ function initServeEvent(server) {
     socket.on("printByFragments", (data) => {
       if (data) {
         const { total, index, htmlFragment, id } = data;
+        const validFragment =
+          typeof id === "string" &&
+          id.length > 0 &&
+          Number.isInteger(total) &&
+          total > 0 &&
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < total &&
+          typeof htmlFragment === "string";
+        if (!validFragment) {
+          socket.emit("error", {
+            msg: "Invalid print fragment",
+            templateId: data.templateId,
+          });
+          return;
+        }
         const currentInfo =
           PRINT_FRAGMENTS_MAPPING[id] ||
           (PRINT_FRAGMENTS_MAPPING[id] = {
             total,
             fragments: [],
+            receivedIndexes: new Set(),
             count: 0,
             updateTime: 0,
           });
+        if (currentInfo.total !== total) {
+          delete PRINT_FRAGMENTS_MAPPING[id];
+          socket.emit("error", {
+            msg: "Inconsistent print fragment count",
+            templateId: data.templateId,
+          });
+          return;
+        }
+        if (currentInfo.receivedIndexes.has(index)) {
+          currentInfo.updateTime = Date.now();
+          return;
+        }
         // 添加片段信息
         currentInfo.fragments[index] = htmlFragment;
+        currentInfo.receivedIndexes.add(index);
         // 计数
         currentInfo.count++;
         // 记录更新时间
         currentInfo.updateTime = Date.now();
         // 全部片段已传输完毕
         if (currentInfo.count === currentInfo.total) {
+          const fragmentsComplete = Array.from(
+            { length: currentInfo.total },
+            (_, fragmentIndex) =>
+              typeof currentInfo.fragments[fragmentIndex] === "string",
+          ).every(Boolean);
+          if (!fragmentsComplete) {
+            delete PRINT_FRAGMENTS_MAPPING[id];
+            socket.emit("error", {
+              msg: "Incomplete print fragments",
+              templateId: data.templateId,
+            });
+            return;
+          }
           // 清除全局缓存
           delete PRINT_FRAGMENTS_MAPPING[id];
           // 合并全部打印片段信息
-          data.html = currentInfo.fragments.join("");
+          const printData = {
+            ...data,
+            html: currentInfo.fragments.join(""),
+          };
+          delete printData.htmlFragment;
+          delete printData.index;
+          delete printData.total;
           // 添加打印任务
           PRINT_RUNNER.add((done) => {
-            data.socketId = socket.id;
-            data.taskId = uuidv7();
-            data.clientType = "local";
-            PRINT_WINDOW.webContents.send("print-new", data);
+            printData.socketId = socket.id;
+            printData.taskId = uuidv7();
+            printData.clientType = "local";
+            PRINT_WINDOW.webContents.send("print-new", printData);
             MAIN_WINDOW.webContents.send("printTask", true);
-            PRINT_RUNNER_DONE[data.taskId] = done;
+            PRINT_RUNNER_DONE[printData.taskId] = done;
           });
         }
         // 开始检查任务
@@ -592,6 +641,7 @@ function initServeEvent(server) {
           (PRINT_FRAGMENTS_MAPPING[id] = {
             total,
             base64List: [],
+            receivedIndexes: new Set(),
             count: 0,
             updateTime: 0,
             width: 0,
@@ -615,7 +665,16 @@ function initServeEvent(server) {
           currentInfo.printer = data.printer || "";
         }
         // 添加片段信息
+        if (
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= currentInfo.total ||
+          currentInfo.receivedIndexes.has(index)
+        ) {
+          return;
+        }
         currentInfo.base64List[index] = base64;
+        currentInfo.receivedIndexes.add(index);
         // 计数
         currentInfo.count++;
         // 记录更新时间
@@ -647,6 +706,7 @@ function initServeEvent(server) {
           (PRINT_FRAGMENTS_MAPPING[id] = {
             total,
             svgList: [],
+            receivedIndexes: new Set(),
             count: 0,
             updateTime: 0,
             width: 0,
@@ -657,6 +717,8 @@ function initServeEvent(server) {
             boxMargin: 0,
             col: 1, // 标签列数，默认1列
             printer: "",
+            keepHtmlFile: false,
+            splitHtmlPrint: false,
           });
         // 设置元信息
         if (index === 0) {
@@ -668,9 +730,20 @@ function initServeEvent(server) {
           currentInfo.boxMargin = data.boxMargin || 0;
           currentInfo.col = data.col || 1; // 标签列数，默认1列
           currentInfo.printer = data.printer || "";
+          currentInfo.keepHtmlFile = data.keepHtmlFile === true;
+          currentInfo.splitHtmlPrint = data.splitHtmlPrint === true;
         }
         // 添加片段信息
+        if (
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= currentInfo.total ||
+          currentInfo.receivedIndexes.has(index)
+        ) {
+          return;
+        }
         currentInfo.svgList[index] = svg;
+        currentInfo.receivedIndexes.add(index);
         // 计数
         currentInfo.count++;
         // 记录更新时间

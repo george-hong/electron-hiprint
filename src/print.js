@@ -177,13 +177,16 @@ async function printHTMLByData(data, socket, logPrintResult, printer) {
     "print-lock.css",
   );
   const styleContent = fs.readFileSync(svgBatchStylePath, "utf8");
-  const tempHtmlPath = path.join(tempHtmlDir, "batch-print.html");
+  const tempHtmlPath = path.join(
+    tempHtmlDir,
+    `batch-print-${data.taskId || uuidv7()}.html`,
+  );
   const targetStr = '<link rel="icon" href="/favicon.ico">';
-  data.html = data.html.replace(
+  const html = data.html.replace(
     targetStr,
     `${targetStr}<style>${styleContent}</style>`,
   );
-  fs.writeFileSync(tempHtmlPath, data.html, "utf8");
+  fs.writeFileSync(tempHtmlPath, html, "utf8");
   console.log(`[printHTMLByData] 临时Html文件: ${tempHtmlPath}`);
   const tempPrintWindow = new BrowserWindow({
     width: 800,
@@ -215,6 +218,24 @@ async function printHTMLByData(data, socket, logPrintResult, printer) {
     duplexMode: data.duplexMode,
     dpi: data.dpi ?? 300,
     pageSize: data.pageSize,
+  };
+  const finishTask = () => {
+    if (data.taskId && PRINT_RUNNER_DONE[data.taskId]) {
+      PRINT_RUNNER_DONE[data.taskId]();
+      delete PRINT_RUNNER_DONE[data.taskId];
+    }
+    MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
+  };
+  const emitFailure = (failureReason) => {
+    const reason = normalizePrintFailureReason(failureReason);
+    console.error(`HTML print failed: ${reason}`);
+    socket &&
+      socket.emit("error", {
+        msg: reason,
+        templateId: data.templateId,
+        replyId: data.replyId,
+      });
+    logPrintResult("failed", reason);
   };
 
   try {
@@ -273,9 +294,15 @@ async function printHTMLByData(data, socket, logPrintResult, printer) {
       };
     }
   } catch (err) {
-    console.error(`HTML打印页面加载/渲染失败: ${err.message}`);
+    emitFailure(err.message);
     if (!tempPrintWindow.isDestroyed()) {
       tempPrintWindow.destroy();
+    }
+    finishTask();
+    try {
+      fs.unlinkSync(tempHtmlPath);
+    } catch (_) {
+      // The temporary file may already have been removed.
     }
     return;
   }
@@ -285,15 +312,9 @@ async function printHTMLByData(data, socket, logPrintResult, printer) {
       printOptions,
       (success, failureReason) => {
         if (!success) {
-          console.error(
-            `HTML打印失败: ${normalizePrintFailureReason(failureReason)}`,
-          );
-          resolve();
+          emitFailure(failureReason);
+          setTimeout(resolve, 180);
           return;
-        }
-        if (data.taskId) {
-          PRINT_RUNNER_DONE[data.taskId]();
-          delete PRINT_RUNNER_DONE[data.taskId];
         }
         if (socket) {
           const result = {
@@ -305,14 +326,19 @@ async function printHTMLByData(data, socket, logPrintResult, printer) {
           socket.emit("success", result);
         }
         logPrintResult("success");
-        MAIN_WINDOW.webContents.send("printTask", PRINT_RUNNER.isBusy());
-        setTimeout(() => resolve(), 180);
+        setTimeout(resolve, 180);
       },
     );
   }).finally(() => {
     if (!tempPrintWindow.isDestroyed()) {
       tempPrintWindow.destroy();
     }
+    try {
+      fs.unlinkSync(tempHtmlPath);
+    } catch (_) {
+      // The temporary file may already have been removed.
+    }
+    finishTask();
   });
 }
 
@@ -1121,10 +1147,6 @@ function initPrintEvent() {
       const tempHtmlDir = store.get("pdfPath") || os.tmpdir();
       fs.mkdirSync(tempHtmlDir, { recursive: true });
 
-      const tempHtmlPath = path.join(
-        tempHtmlDir,
-        "temp-svg-print.html",
-      );
       const requestUnit = normalizePrintUnit(data.unit || "mm");
       const requestWidth = Number(data.width) || 0;
       const requestHeight = Number(data.height) || 0;
@@ -1136,23 +1158,42 @@ function initPrintEvent() {
 .svg-page svg { display: block; width: 100%; height: 100%; }
 `
         : "";
-      const htmlContent = `<!DOCTYPE html>
+      const createHtmlContent = (pages, singlePage = false) => `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
   <title>${data.title ? data.title : "SVG批量打印"}</title>
   <style>${styleContent}
-${dynamicStyle}</style>
+${dynamicStyle}
+${singlePage && hasRequestedSize ? `
+/* Chromium 会将刚好等于物理页高的非整数 CSS 像素向上分页，预留 1px 防止空白尾页。 */
+#printElement, .svg-page { height: calc(${requestHeight}${requestUnit} - 1px) !important; }
+.svg-page { page-break-after: auto !important; break-after: auto !important; }
+.svg-page svg { height: 100%; }
+` : ""}</style>
 </head>
 <body>
-  <div id="printElement">${svgPages.join("")}</div>
+  <div id="printElement">${pages.join("")}</div>
 </body>
 </html>`;
-      fs.writeFileSync(tempHtmlPath, htmlContent, "utf8");
-      console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
+      const tempFileId = String(data.taskId || uuidv7()).replace(
+        /[^a-zA-Z0-9_-]/g,
+        "_",
+      );
+      const writeTempHtml = (pages, suffix = "", singlePage = false) => {
+        const tempHtmlPath = path.join(
+          tempHtmlDir,
+          `temp-svg-print-${tempFileId}${suffix}.html`,
+        );
+        fs.writeFileSync(
+          tempHtmlPath,
+          createHtmlContent(pages, singlePage),
+          "utf8",
+        );
+        console.log(`[printSVGBatch] 临时Html文件: ${tempHtmlPath}`);
+        return tempHtmlPath;
+      };
 
-      const pageRanges =
-        typeof data.pageRanges === "string" ? data.pageRanges : undefined;
       const printOptions = {
         silent: data.silent ?? true,
         printBackground: data.printBackground ?? true,
@@ -1166,7 +1207,6 @@ ${dynamicStyle}</style>
         pagesPerSheet: data.pagesPerSheet ?? 1,
         collate: data.collate ?? true,
         copies: data.copies ?? 1,
-        pageRanges,
         duplexMode: data.duplexMode,
         dpi: data.dpi ?? 300,
         pageSize: data.pageSize,
@@ -1178,7 +1218,7 @@ ${dynamicStyle}</style>
         };
       }
 
-      const printBatchHtml = (batchHtmlPath, totalPages) => new Promise((resolve, reject) => {
+      const printBatchHtml = (batchHtmlPath, totalPages, forceSinglePage = false) => new Promise((resolve, reject) => {
         const tempPrintWindow = new BrowserWindow({
           width: 100,
           height: 100,
@@ -1288,17 +1328,22 @@ ${dynamicStyle}</style>
                     );
                     return;
                   }
-                  if (hasRequestedSize) {
-                    tempPrintWindow.setContentSize(
-                      convertUnitToPx(svgInfo.width, svgInfo.unit),
-                      convertUnitToPx(svgInfo.height, svgInfo.unit),
-                    );
-                  } else {
-                    tempPrintWindow.setContentSize(
-                      Math.ceil(svgInfo.width),
-                      Math.ceil(svgInfo.height),
-                    );
+                  if (!forceSinglePage) {
+                    if (hasRequestedSize) {
+                      tempPrintWindow.setContentSize(
+                        convertUnitToPx(svgInfo.width, svgInfo.unit),
+                        convertUnitToPx(svgInfo.height, svgInfo.unit),
+                      );
+                    } else {
+                      tempPrintWindow.setContentSize(
+                        Math.ceil(svgInfo.width),
+                        Math.ceil(svgInfo.height),
+                      );
+                    }
                   }
+                  console.log(
+                    `[printSVGBatch] HTML/SVG直打，页数=${totalPages}`,
+                  );
                   tempPrintWindow.webContents.print(printOptions, (success, failureReason) => {
                     if (!success) {
                       done(
@@ -1326,7 +1371,22 @@ ${dynamicStyle}</style>
           });
       });
 
-      await printBatchHtml(tempHtmlPath, svgPages.length);
+      if (data.splitHtmlPrint === true) {
+        console.log(
+          `[printSVGBatch] 启用拆分打印，共 ${svgPages.length} 个独立任务`,
+        );
+        for (let index = 0; index < svgPages.length; index++) {
+          const tempHtmlPath = writeTempHtml(
+            [svgPages[index]],
+            `-${index + 1}`,
+            true,
+          );
+          await printBatchHtml(tempHtmlPath, 1, true);
+        }
+      } else {
+        const tempHtmlPath = writeTempHtml(svgPages);
+        await printBatchHtml(tempHtmlPath, svgPages.length);
+      }
 
       onSuccess();
     } catch (error) {
